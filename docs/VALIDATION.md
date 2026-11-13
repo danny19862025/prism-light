@@ -11,7 +11,7 @@ Passed:
 - Packaged startup smoke: `QT_QPA_PLATFORM=offscreen dist/PrismLight/PrismLight --smoke-test` (exit 0).
 - Actual Qt screenshot inspected; controls no longer overlap. Content scrolls when vertical space is constrained.
 
-Build limitation: the Linux packaging tool warned that optional TIFF image plugin dependency `libtiff.so.5` was unavailable. The app uses no TIFF images, and packaged demo startup passed. The Windows build has not run; its dependency inventory must be checked on Windows.
+Build limitation: the Linux packaging tool warned that optional TIFF image plugin dependency `libtiff.so.5` was unavailable. The app uses no TIFF images, and packaged demo startup passed. The initial Windows GitHub Actions build passed automated tests, packaging and packaged startup; its run is linked below.
 
 Pending on the user's Windows PC:
 
@@ -20,3 +20,9 @@ Pending on the user's Windows PC:
 - Visible lighting persistence, preset restoration after restart and coexistence with other RGB software.
 
 No real OpenRGB server or physical RGB hardware was used for these checks. All SDK wire tests used an independent local fake server. There is no verified hardware compatibility list.
+
+## Windows CI evidence
+
+The [initial Windows run](https://github.com/danny19862025/prism-light/actions/runs/43362783469) completed successfully. GitHub's Windows runner with Python 3.12 passed the 14 automated tests, built `PrismLight.exe`, passed its offscreen demo startup smoke test, and uploaded the portable build artifact. This validates the executable on the CI runner; it does not verify physical RGB devices, display scaling or interactive appearance on the user's PC.
+
+The updated workflow additionally checks `Run-PrismLight.cmd --smoke-test`, gives packaged startup a 30-second timeout and uploads a portable Windows ZIP. See the latest run for those checks.

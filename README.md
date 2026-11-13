@@ -18,9 +18,40 @@ Official source and SDK docs inspected before implementation:
 - Local reference checkout: `../openrgb-upstream` (not needed to run).
 - License and integration notes: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Windows setup and run
+## Windows quick start
 
-Install 64-bit Python 3.12 or newer from https://www.python.org/downloads/windows/. Open PowerShell in this project folder:
+Prism Light has a Windows desktop build. Choose the portable app or run the source. OpenRGB is needed only for real devices; demo mode works by itself.
+
+### Download the portable Windows app
+
+1. Open [Windows builds on GitHub Actions](https://github.com/danny19862025/prism-light/actions/workflows/windows.yml).
+2. Select the latest **successful** run. Under **Artifacts**, download **PrismLight-windows-prototype**. GitHub may require signing in to download a build artifact; Prism Light itself has no account or sign-in.
+3. Extract the downloaded artifact. If it contains `PrismLight-windows.zip`, extract that ZIP too. Open the extracted `PrismLight` folder and double-click **PrismLight.exe**.
+4. Click **Enter demo mode** to try the simulated devices, or start OpenRGB's SDK server and click **Connect OpenRGB**.
+
+Keep `PrismLight.exe` and the `_internal` folder together. Do not run the app from inside a ZIP or copy only the `.exe`. The portable build includes Python and Qt, so you do not need to install Python. This prototype is unsigned. Build availability and check results are shown in Actions; a successful build does not establish compatibility with your RGB hardware.
+
+### Run the source on Windows
+
+1. Install **64-bit Python 3.12 or newer** from [python.org](https://www.python.org/downloads/windows/), including the Python launcher.
+2. [Download the source ZIP](https://github.com/danny19862025/prism-light/archive/refs/heads/main.zip) and extract it, or clone the repository:
+
+   ```powershell
+   git clone https://github.com/danny19862025/prism-light.git
+   cd prism-light
+   ```
+
+3. Double-click **Demo-Windows.cmd** to try the simulated devices. On first run it creates `.venv` and installs the dependencies. Internet access is needed for this setup.
+4. Double-click **Run-PrismLight.cmd** for normal startup. For real lighting, follow **Connect OpenRGB** below.
+
+You can also run these launchers from PowerShell:
+
+```powershell
+.\Demo-Windows.cmd
+.\Run-PrismLight.cmd
+```
+
+Manual setup, if preferred:
 
 ```powershell
 py -3 -m venv .venv
@@ -28,11 +59,13 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe main.py --demo
 ```
 
-For normal startup, omit `--demo`. Demo is also available from the connection bar. It is always explicitly labelled and never contacts hardware. It includes two controllable simulated devices and one unsupported simulated device.
+Omit `--demo` for normal startup. Demo is always explicitly labelled, never contacts hardware, and includes two controllable simulated devices and one unsupported simulated device. You do not need to activate the virtual environment or change PowerShell execution policy. To reinstall dependencies, run `Setup-Windows.cmd` from a terminal.
 
-Linux development:
+### Linux development
 
 ```sh
+git clone https://github.com/danny19862025/prism-light.git
+cd prism-light
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python main.py --demo
@@ -64,16 +97,19 @@ Writes use a temporary file, flush and atomic replacement. Demo and hardware pre
 
 ## Build a Windows app
 
-Run on Windows, in the project folder:
+Double-click **Build-Windows.cmd** in the extracted source folder. It installs dependencies, runs tests, builds the executable, checks packaged demo startup, and creates `dist/PrismLight-windows.zip`. Python 3.12+ and internet access for the initial downloads are required. A failure stops the build and leaves its error visible.
+
+Alternatively, run these commands on Windows in the project folder:
 
 ```powershell
+py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe build.py
 .\dist\PrismLight\PrismLight.exe --demo
 ```
 
-The result is a portable **folder** at `dist/PrismLight/`. Keep the entire folder together. Python need not be installed on the destination machine. Build on Windows for Windows; PyInstaller does not cross-compile Windows executables on Linux. The optional GitHub Actions workflow builds and tests on Windows once this project is pushed to a repository; it has not been run here. Public distribution must retain the included notices, licenses and corresponding source; see third-party notices. This prototype is unsigned.
+The result is a portable **folder** at `dist/PrismLight/`. Keep the entire folder together. Python need not be installed on the destination machine. Build on Windows for Windows; PyInstaller does not cross-compile Windows executables on Linux. The [GitHub Actions workflow](https://github.com/danny19862025/prism-light/actions/workflows/windows.yml) runs on Windows for every push and pull request, tests the Windows launcher, builds the `.exe`, checks packaged demo startup and uploads the portable ZIP. You can also start it with **Run workflow**. Use the latest successful run for downloads. Public distribution must retain the included notices, licenses and corresponding source; see third-party notices. This prototype is unsigned.
 
 ## Checks
 
@@ -81,7 +117,8 @@ The result is a portable **folder** at `dist/PrismLight/`. Keep the entire folde
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-14 tests passed on Linux with Qt's offscreen platform:
+14 tests passed on Linux and on a Windows GitHub Actions runner with Qt's offscreen platform. The [initial Windows run](https://github.com/danny19862025/prism-light/actions/runs/43362783469) also built the executable and passed packaged demo startup:
+
 
 - Real localhost TCP framing against a fake SDK server, protocol negotiation to v3, device and zone decoding, and RGB/update-mode encoding.
 - Connection refused, timeout, server disconnect, invalid magic, old protocol and truncated data.
@@ -92,10 +129,12 @@ The result is a portable **folder** at `dist/PrismLight/`. Keep the entire folde
 
 A visual capture was inspected and the layout corrected. `docs/demo.png` is the actual Qt demo interface, not a design mockup. `--smoke-test` launches the labelled demo and exits after verifying basic UI startup, useful for packaged builds.
 
-**Requires your Windows PC:** run the packaged executable; check scaling at 100%, 150% and 200%, keyboard navigation and colour dialog; connect to your actual OpenRGB server; verify device/zone names, colour order, dimming from 0–100%, single and multi-device application, disconnect/reconnect, restarting the app and restoring presets, and behaviour on unplug/rescan. No physical hardware or Windows compatibility has been verified here. The fake server is a protocol test fixture, not OpenRGB itself.
+**Requires your Windows PC:** run the packaged executable; check scaling at 100%, 150% and 200%, keyboard navigation and colour dialog; connect to your actual OpenRGB server; verify device/zone names, colour order, dimming from 0–100%, single and multi-device application, disconnect/reconnect, restarting the app and restoring presets, and behaviour on unplug/rescan. Windows CI has verified automated tests, packaging and offscreen demo startup. Your Windows desktop appearance and physical hardware have not been verified. The fake server is a protocol test fixture, not OpenRGB itself.
 
 ## Troubleshooting
 
+- **Windows source launcher cannot find Python:** install 64-bit Python with its launcher, then reopen the terminal and run `Setup-Windows.cmd`.
+- **Portable app is missing files:** fully extract the ZIP and keep the `.exe` beside `_internal`.
 - **Connection refused:** start OpenRGB's SDK server and check its port matches. OpenRGB must accept IPv4 localhost connections.
 - **Timeout or invalid packet:** verify the port belongs to OpenRGB, not another service. SDK v3+ is required.
 - **No devices:** inspect OpenRGB detection, permissions and supported-device documentation; reconnect after detection completes.

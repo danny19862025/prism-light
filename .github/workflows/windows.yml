@@ -5,13 +5,20 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          architecture: x64
       - run: python -m pip install -r requirements-build.txt
       - run: python -m unittest discover -s tests -v
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Check Windows source launcher
+        shell: cmd
+        run: Run-PrismLight.cmd --smoke-test
         env:
           QT_QPA_PLATFORM: offscreen
       - run: python build.py
@@ -19,9 +26,11 @@ jobs:
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = 'offscreen'
-          $p = Start-Process -FilePath '.\dist\PrismLight\PrismLight.exe' -ArgumentList '--smoke-test' -PassThru -Wait
+          $p = Start-Process -FilePath '.\dist\PrismLight\PrismLight.exe' -ArgumentList '--smoke-test' -PassThru
+          if (-not $p.WaitForExit(30000)) { $p.Kill(); throw 'Packaged startup timed out' }
           if ($p.ExitCode -ne 0) { throw 'Packaged startup smoke test failed' }
       - uses: actions/upload-artifact@v4
         with:
           name: PrismLight-windows-prototype
-          path: dist/PrismLight/
+          path: dist/PrismLight-windows.zip
+          if-no-files-found: error
