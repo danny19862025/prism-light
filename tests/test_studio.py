@@ -126,6 +126,20 @@ class StudioUITests(unittest.TestCase):
     def test_all_tabs_and_reference_archive(self):
         self.assertEqual(self.w.tabs.count(),7)
         for i in range(self.w.tabs.count()):self.w.tabs.setCurrentIndex(i);self.app.processEvents()
+    def test_gallery_navigation_filter_and_playback(self):
+        from prism.shell import LOOKS
+        w=self.w;shell=w.shell
+        self.assertEqual(len(shell.cards),17)
+        shell.set_category('Reactive')
+        self.assertEqual(sum(not card.isHidden() for _,card in shell.cards),5)
+        shell.search.setText('Screen Flow')
+        self.assertEqual(sum(not card.isHidden() for _,card in shell.cards),1)
+        shell.choose(LOOKS[2]);self.assertEqual(w.effect.currentText(),'Gradient')
+        self.assertEqual(shell.stack.currentIndex(),1);self.assertEqual(w.tabs.currentIndex(),0)
+        shell.toggle();self.spin();self.assertTrue(w.streaming)
+        shell.toggle();self.assertFalse(w.streaming)
+        shell.volume.setValue(35);self.assertEqual(w.brightness.value(),35)
+        shell.navigate(None,'Discover');self.assertEqual(shell.stack.currentIndex(),0)
     def test_blackout_waits_for_inflight_frame(self):
         import threading
         w=self.w;gate=threading.Event();original=w.backend.apply_frame

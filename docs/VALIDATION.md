@@ -4,7 +4,7 @@ Environment: Linux x86-64, Python 3.14.9, PySide6/Qt 6.10.1, PyInstaller 6.17.0.
 
 ## Verified locally
 
-- 24 automated tests: SDK negotiation/framing, fragmented responses, timeout/refusal/disconnect, invalid/old packets, parsing, device-list change rejection, unsupported-device isolation, independent LED bytes and Direct-mode initialization once per session.
+- 25 automated tests: SDK negotiation/framing, fragmented responses, timeout/refusal/disconnect, invalid/old packets, parsing, device-list change rejection, unsupported-device isolation, independent LED bytes and Direct-mode initialization once per session.
 - Frame validation rejects wrong lengths, invalid colors and unknown device identities before lighting writes.
 - All 17 effects return bounded RGB output; zero brightness renders black and screen-grid mapping is checked.
 - Scene round-trip, invalid parameter rejection and corrupt-file preservation.
@@ -24,3 +24,7 @@ Environment: Linux x86-64, Python 3.14.9, PySide6/Qt 6.10.1, PyInstaller 6.17.0.
 - LCD hardware, fan/pump writes and game-specific integrations are not implemented and are labelled as unavailable rather than validated features.
 
 No hardware compatibility list, exact SignalRGB parity or public-release certification is claimed. The Linux binary is built for the current environment; it has not been tested on other distributions. Qt/PyInstaller warnings about optional system libraries are recorded in the build log; packaged smoke startup is the relevant local executable check.
+
+## Gallery redesign
+
+The dark sidebar, effect gallery, spotlight carousel and persistent playback bar use original Qt-painted artwork. A GUI test verifies category/search filtering, effect-card navigation, playback and brightness synchronization. Existing device, scene, streaming and blackout tests remain in place. Source and packaged startup are checked after rebuilding.

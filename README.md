@@ -28,6 +28,10 @@ Double-click **Build-Windows.cmd** on Windows to test and build `dist/PrismLight
 
 The GitHub Actions workflow runs Windows and Ubuntu tests/builds on pushes and pull requests, and can also be started manually. Check the current workflow run for platform validation and downloadable artifacts.
 
+## Desktop layout
+
+The Discover page has a searchable, categorized gallery of the 17 included effects and a five-page spotlight carousel. Select **Use effect** to open its lighting editor. The left sidebar opens scenes, lighting/devices, layouts, macros, monitoring, audio/screen inputs and protocol references. **Connection** expands the OpenRGB controls. The bottom playback bar stays visible across pages and controls play/pause, previous/next effect, blackout and brightness.
+
 ## Connect hardware
 
 1. Install [OpenRGB](https://openrgb.org/) and check which devices it detects. Follow its platform-specific device/permission setup.

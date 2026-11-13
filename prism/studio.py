@@ -131,6 +131,8 @@ class Window(BaseWindow):
         self.build_automation_tab();self.build_catalog_tab();self.build_status_tab()
         self.timer.setInterval(30)
         self.reload_scenes();self.refresh_controls()
+        from .shell import Shell
+        self.shell=Shell(self)
     def layout_for(self,d):
         if d.key not in self.layouts:
             n=next((i for i,v in enumerate(self.devices) if v.key==d.key),0)
