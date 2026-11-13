@@ -11,7 +11,7 @@ root=Path(__file__).resolve().parent
 subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--onedir',
                 '--windowed','--name','PrismLight',str(root/'main.py')],cwd=root,check=True)
 bundle=root/'dist'/'PrismLight'
-for name in ('LICENSE','README.md','THIRD_PARTY_NOTICES.md','requirements.txt','requirements-build.txt','build.py','main.py','Setup-Windows.cmd','Run-PrismLight.cmd','Demo-Windows.cmd','Build-Windows.cmd'):
+for name in ('LICENSE','README.md','THIRD_PARTY_NOTICES.md','requirements.txt','requirements-build.txt','build.py','main.py','Setup-Windows.cmd','Run-PrismLight.cmd','Demo-Windows.cmd','Build-Windows.cmd','Run-PrismLight.sh'):
     shutil.copy2(root/name,bundle/name)
 for name in ('prism','tests','licenses','docs'):
     shutil.copytree(root/name,bundle/name,dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__'))
@@ -29,4 +29,7 @@ for distribution in distributions():
 if sys.platform == 'win32':
     archive = shutil.make_archive(str(root/'dist'/'PrismLight-windows'), 'zip', root/'dist', 'PrismLight')
     print(f'Windows portable ZIP: {archive}')
+else:
+    archive = shutil.make_archive(str(root/'dist'/'PrismLight-Studio-linux'), 'zip', root/'dist', 'PrismLight')
+    print(f'Linux portable ZIP: {archive}')
 print(f'Portable folder: {bundle}. Keep the entire folder together.')

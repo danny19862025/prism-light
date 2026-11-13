@@ -74,7 +74,7 @@ class Server:
                         # Deliberately fragmented TCP framing.
                         conn.sendall(wire[:7])
                         conn.sendall(wire[7:])
-        except (EOFError, ConnectionResetError):
+        except (EOFError, ConnectionResetError, BrokenPipeError):
             pass
         except Exception as e:
             self.errors.append(e)

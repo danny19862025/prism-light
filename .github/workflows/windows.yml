@@ -1,11 +1,15 @@
-name: Windows foundation checks
+name: Studio desktop builds
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
 jobs:
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 15
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -17,20 +21,21 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
       - name: Check Windows source launcher
+        if: runner.os == 'Windows'
         shell: cmd
         run: Run-PrismLight.cmd --smoke-test
         env:
           QT_QPA_PLATFORM: offscreen
       - run: python build.py
       - name: Check packaged demo startup
-        shell: pwsh
+        shell: python
         run: |
-          $env:QT_QPA_PLATFORM = 'offscreen'
-          $p = Start-Process -FilePath '.\dist\PrismLight\PrismLight.exe' -ArgumentList '--smoke-test' -PassThru
-          if (-not $p.WaitForExit(30000)) { $p.Kill(); throw 'Packaged startup timed out' }
-          if ($p.ExitCode -ne 0) { throw 'Packaged startup smoke test failed' }
+          import os, subprocess, sys
+          env = dict(os.environ, QT_QPA_PLATFORM='offscreen')
+          exe = 'dist/PrismLight/PrismLight.exe' if sys.platform == 'win32' else 'dist/PrismLight/PrismLight'
+          subprocess.run([exe, '--smoke-test'], env=env, timeout=30, check=True)
       - uses: actions/upload-artifact@v4
         with:
-          name: PrismLight-windows-prototype
-          path: dist/PrismLight-windows.zip
+          name: PrismLight-Studio-${{ runner.os }}
+          path: dist/*.zip
           if-no-files-found: error

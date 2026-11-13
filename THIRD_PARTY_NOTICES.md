@@ -1,6 +1,6 @@
 # Third-party notices
 
-Prism Light is original GPL-3.0-only software; copyright (C) 2026 Prism Light contributors. The full license is in LICENSE. No SignalRGB material is used.
+Prism Light is original GPL-3.0-only software; copyright (C) 2026 Prism Light contributors. The full license is in LICENSE. No SignalRGB binaries, scripts, QML, graphics or runtime are bundled. Architecture research used a locally supplied installer. The optional reference importer reads names and USB IDs from caller-supplied recovered source as inert text; it does not execute or redistribute that source.
 
 ## OpenRGB (separate user-installed backend)
 

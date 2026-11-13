@@ -99,11 +99,13 @@ class OpenRGB:
     def __init__(self):
         self.sock = None
         self.devices = []
+        self.prepared = set()
     def close(self):
         if self.sock:
             self.sock.close()
         self.sock = None
         self.devices = []
+        self.prepared = set()
     def send(self, command, data=b'', device=0):
         if not self.sock:
             raise SDKError('Disconnected. Connect to OpenRGB first.')
@@ -183,6 +185,45 @@ class OpenRGB:
             results.append(device.name + ': sent')
         return '; '.join(results) or 'No matching devices selected.'
 
+    def apply_frame(self, frames):
+        """Send complete per-device RGB frames. Called only by the serial worker."""
+        from collections import Counter
+        counts = Counter(d.key for d in self.devices)
+        encoded = []
+        # Validate the entire frame before any mode or lighting mutation.
+        for device in self.devices:
+            if device.key not in frames:
+                continue
+            if not device.supported or counts[device.key] != 1:
+                raise SDKError('Frame targets an unsupported or ambiguous device.')
+            pixels = frames[device.key]
+            if len(pixels) != device.leds:
+                raise ValueError('Frame LED count does not match the connected device.')
+            data = bytearray()
+            for pixel in pixels:
+                if len(pixel) != 3 or any(type(c) is not int or not 0 <= c <= 255 for c in pixel):
+                    raise ValueError('Frame pixels must contain three integer channels, 0–255.')
+                data.extend((*pixel, 0))
+            encoded.append((device, bytes(data)))
+        if set(frames) - {d.key for d in self.devices}:
+            raise SDKError('Frame targets a missing device. Reconnect to refresh the layout.')
+        self.health()
+        for device, pixels in encoded:
+            if device.key not in self.prepared:
+                title, fields, colors = device.modes[device.direct]
+                fields = fields.copy()
+                fields[11] = 1
+                if fields[1] & 16:
+                    fields[9] = fields[5]
+                title = title.encode('utf-8') + b'\0'
+                mode = struct.pack('<H', len(title)) + title + struct.pack('<12I', *fields) + struct.pack('<H', len(colors)//4) + colors
+                body = struct.pack('<I', device.direct) + mode
+                self.send(1101, struct.pack('<I', len(body)+4) + body, device.index)
+                self.prepared.add(device.key)
+            body = struct.pack('<H', device.leds) + pixels
+            self.send(1050, struct.pack('<I', len(body)+4) + body, device.index)
+        return len(encoded)
+
 class Demo:
     demo = True
     def __init__(self):
@@ -200,3 +241,7 @@ class Demo:
         rgb_bytes(color, brightness)
         count = sum(d.key in keys and d.supported for d in self.devices)
         return f'DEMO: simulated colour on {count} device(s). No hardware commands sent.'
+
+    def apply_frame(self, frames):
+        self.last_frame = frames
+        return len(frames)
