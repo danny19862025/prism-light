@@ -26,3 +26,5 @@ No real OpenRGB server or physical RGB hardware was used for these checks. All S
 The [initial Windows run](https://github.com/danny19862025/prism-light/actions/runs/43362783469) completed successfully. GitHub's Windows runner with Python 3.12 passed the 14 automated tests, built `PrismLight.exe`, passed its offscreen demo startup smoke test, and uploaded the portable build artifact. This validates the executable on the CI runner; it does not verify physical RGB devices, display scaling or interactive appearance on the user's PC.
 
 The updated workflow additionally checks `Run-PrismLight.cmd --smoke-test`, gives packaged startup a 30-second timeout and uploads a portable Windows ZIP. See the latest run for those checks.
+
+The first added launcher check exposed `py -3` selecting Python 3.15 on the Windows runner, outside the pinned PySide6 version's supported range. Setup now selects a supported 64-bit interpreter explicitly (3.12, 3.13 or 3.14) and rejects an incompatible existing virtual environment.

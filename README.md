@@ -6,7 +6,7 @@ An original personal RGB lighting desktop app. Free software, local only: no sub
 
 ## Stack and integration
 
-Python 3.12+ and Qt Widgets through PySide6 give us native desktop windows, accessible standard controls, a polished dark interface and a Windows packaging route. The UI and preset storage are separate from a small original SDK transport. Socket work runs on a serial worker thread so a failed connection does not freeze the interface. No browser runtime is needed.
+Python 3.12–3.14 and Qt Widgets through PySide6 give us native desktop windows, accessible standard controls, a polished dark interface and a Windows packaging route. The UI and preset storage are separate from a small original SDK transport. Socket work runs on a serial worker thread so a failed connection does not freeze the interface. No browser runtime is needed.
 
 OpenRGB is a **separate program**, connected only over documented TCP SDK packets on `127.0.0.1`. Hardware detection and device drivers remain in OpenRGB. This project neither links nor copies its controller code and does not bundle OpenRGB. The client requests SDK protocol **3** (OpenRGB 0.7+); newer servers negotiate down. Older servers fail with a helpful error. Current protocol 6 features, segments, zone effects and mode-specific-only devices are outside this foundation.
 
@@ -33,7 +33,7 @@ Keep `PrismLight.exe` and the `_internal` folder together. Do not run the app fr
 
 ### Run the source on Windows
 
-1. Install **64-bit Python 3.12 or newer** from [python.org](https://www.python.org/downloads/windows/), including the Python launcher.
+1. Install **64-bit Python 3.12, 3.13 or 3.14** from [python.org](https://www.python.org/downloads/windows/), including the Python launcher.
 2. [Download the source ZIP](https://github.com/danny19862025/prism-light/archive/refs/heads/main.zip) and extract it, or clone the repository:
 
    ```powershell
@@ -51,15 +51,15 @@ You can also run these launchers from PowerShell:
 .\Run-PrismLight.cmd
 ```
 
-Manual setup, if preferred:
+Manual setup with Python 3.12, if preferred (use `-3.13` or `-3.14` if that is your installed version):
 
 ```powershell
-py -3 -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe main.py --demo
 ```
 
-Omit `--demo` for normal startup. Demo is always explicitly labelled, never contacts hardware, and includes two controllable simulated devices and one unsupported simulated device. You do not need to activate the virtual environment or change PowerShell execution policy. To reinstall dependencies, run `Setup-Windows.cmd` from a terminal.
+Omit `--demo` for normal startup. Demo is always explicitly labelled, never contacts hardware, and includes two controllable simulated devices and one unsupported simulated device. You do not need to activate the virtual environment or change PowerShell execution policy. To reinstall dependencies, run `Setup-Windows.cmd` from a terminal. The launcher prefers Python 3.12, then 3.13, then 3.14; Python 3.15 is not supported by the pinned Qt dependency.
 
 ### Linux development
 
@@ -97,12 +97,12 @@ Writes use a temporary file, flush and atomic replacement. Demo and hardware pre
 
 ## Build a Windows app
 
-Double-click **Build-Windows.cmd** in the extracted source folder. It installs dependencies, runs tests, builds the executable, checks packaged demo startup, and creates `dist/PrismLight-windows.zip`. Python 3.12+ and internet access for the initial downloads are required. A failure stops the build and leaves its error visible.
+Double-click **Build-Windows.cmd** in the extracted source folder. It installs dependencies, runs tests, builds the executable, checks packaged demo startup, and creates `dist/PrismLight-windows.zip`. Python 3.12–3.14 and internet access for the initial downloads are required. A failure stops the build and leaves its error visible.
 
 Alternatively, run these commands on Windows in the project folder:
 
 ```powershell
-py -3 -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe build.py
