@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 from prism.backend import OpenRGB,SDKError
-from prism.effects import EFFECTS,render,points
+from prism.effects import EFFECTS,NEW_EFFECTS,render,points
 from prism.scenes import SceneStore,validate
 from prism.catalog import import_catalog
 from prism.sources import Events
@@ -50,6 +50,27 @@ class FrameTests(unittest.TestCase):
                 self.assertFalse(any(c[1] in (1050,1101) for c in server.commands))
 
 class EngineTests(unittest.TestCase):
+    def test_new_effects_move_and_share_desk_coordinates(self):
+        coords=[(x/15,y/7) for y in range(8) for x in range(16)]
+        inputs={'audio':.2,'bands':[.1,.2,.08,.18,.05,.14,.22,.04]}
+        for effect in NEW_EFFECTS:
+            with self.subTest(effect=effect):
+                settings=dict(scene(),scale=140,density=75)
+                frames=[render(effect,coords,t,settings,inputs) for t in (.2,1.1,2.8)]
+                self.assertTrue(any(any(pixel) for frame in frames for pixel in frame))
+                self.assertGreater(len(set(frames[1])),1)
+                if effect!='Audio bars':self.assertTrue(any(frame!=frames[0] for frame in frames[1:]))
+                full=frames[1]
+                left=render(effect,coords[:64],1.1,settings,inputs)
+                right=render(effect,coords[64:],1.1,settings,inputs)
+                self.assertEqual(full,left+right,'Pattern must not restart per device')
+        for effect in ('Audio bars','Audio rings'):
+            self.assertEqual(render(effect,coords,1,scene()),[(0,0,0)]*len(coords))
+    def test_expanded_scene_controls_remain_backward_compatible(self):
+        self.assertEqual(validate(scene())['effect'],scene()['effect'])
+        for key,value in [('scale',0),('scale',401),('density',0),('density',101)]:
+            with self.assertRaises(ValueError):validate(dict(scene(),**{key:value}))
+        self.assertEqual(validate(dict(scene(),effect='Rain',scale=150,density=70))['density'],70)
     def test_all_effects_bounds_blackout_and_inputs(self):
         coords=points(99,dict(x=.1,y=.1,width=.7,height=.2,columns=18,rotation=35))
         self.assertEqual(len(coords),99)
@@ -129,9 +150,9 @@ class StudioUITests(unittest.TestCase):
     def test_gallery_navigation_filter_and_playback(self):
         from prism.shell import LOOKS
         w=self.w;shell=w.shell
-        self.assertEqual(len(shell.cards),17)
+        self.assertEqual(len(shell.cards),len(EFFECTS))
         shell.set_category('Reactive')
-        self.assertEqual(sum(not card.isHidden() for _,card in shell.cards),5)
+        self.assertEqual(sum(not card.isHidden() for _,card in shell.cards),sum(look[4]=='Reactive' for look in LOOKS))
         shell.search.setText('Screen Flow')
         self.assertEqual(sum(not card.isHidden() for _,card in shell.cards),1)
         shell.choose(LOOKS[2]);self.assertEqual(w.effect.currentText(),'Gradient')

@@ -4,9 +4,9 @@ Environment: Linux x86-64, Python 3.14.9, PySide6/Qt 6.10.1, PyInstaller 6.17.0.
 
 ## Verified locally
 
-- 30 automated tests: SDK negotiation/framing, fragmented responses, timeout/refusal/disconnect, invalid/old packets, parsing, device-list change rejection, unsupported-device isolation, independent LED bytes and Direct-mode initialization once per session.
+- 32 automated tests: SDK negotiation/framing, fragmented responses, timeout/refusal/disconnect, invalid/old packets, parsing, device-list change rejection, unsupported-device isolation, independent LED bytes and Direct-mode initialization once per session.
 - Frame validation rejects wrong lengths, invalid colors and unknown device identities before lighting writes.
-- All 17 effects return bounded RGB output; zero brightness renders black and screen-grid mapping is checked.
+- All 37 effects return bounded RGB output; zero brightness renders black and screen-grid mapping is checked.
 - Scene round-trip, invalid parameter rejection and corrupt-file preservation.
 - Inert plugin catalog import; the supplied recovered archive indexes 478 JS plugin files. No code is evaluated.
 - Local HTTP endpoint rejects absent authentication, accepts an authorized color and closes on stop.
@@ -34,3 +34,7 @@ The dark sidebar, effect gallery, spotlight carousel and persistent playback bar
 The managed engine is tested with a real child-process SDK fixture: automatic private-port negotiation, missing/escaping executable rejection, readiness cancellation, environment isolation and child cleanup. Studio integration is tested through the managed discovery entry point with no port controls. Source startup against the actual pinned Linux OpenRGB 1.1 runtime completed SDK negotiation with zero devices visible in the sandbox and shut down the child cleanly. Zero visible devices is not a hardware-compatibility result.
 
 The portable engine includes checksum-verified official assets, its original license and the exact matching OpenRGB source archive. Windows asset integrity and archive layout are verified locally; Windows execution remains unverified. `--hardware-smoke-test` exercises actual engine startup and shutdown in the portable Linux build without LED writes. Demo startup never launches the hardware engine.
+
+## Twenty additional effects
+
+All 37 renderers are checked for frame length, bounded integer RGB channels and blackout at zero brightness. Each new renderer is additionally checked for nonblack spatial output, animation over sampled times where appropriate, and identical results when one desk-space frame is rendered in separate device slices. Audio bars/rings remain black without audio input. Scale/density ranges and older-scene defaults are validated. Gallery counts and category filters derive from the catalog instead of fixed effect counts.

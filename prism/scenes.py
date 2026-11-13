@@ -16,6 +16,9 @@ def validate(scene):
         v = scene[name]
         if type(v) is not int or not lo <= v <= hi:
             raise ValueError('Invalid scene '+name)
+    for name,default,lo,hi in [('scale',100,25,400),('density',50,1,100)]:
+        v=scene.get(name,default)
+        if type(v) is not int or not lo<=v<=hi:raise ValueError('Invalid scene '+name)
     if scene.get('scope') not in ('demo','hardware') or not isinstance(scene.get('devices'),list):
         raise ValueError('Invalid scene scope/devices.')
     if not all(isinstance(k,str) and len(k)<=128 for k in scene['devices']):

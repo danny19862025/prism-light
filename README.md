@@ -31,7 +31,7 @@ The GitHub Actions workflow runs Windows and Ubuntu tests/builds on pushes and p
 
 ## Desktop layout
 
-The Discover page has a searchable, categorized gallery of the 17 included effects and a five-page spotlight carousel. Select **Use effect** to open its lighting editor. The left sidebar opens scenes, lighting/devices, layouts, macros, monitoring, audio/screen inputs and protocol references. **Hardware** expands discovery controls and diagnostics. The bottom playback bar stays visible across pages and controls play/pause, previous/next effect, blackout and brightness.
+The Discover page has a searchable, categorized gallery of the 37 included effects and a five-page spotlight carousel. Select **Use effect** to open its lighting editor. The left sidebar opens scenes, lighting/devices, layouts, macros, monitoring, audio/screen inputs and protocol references. **Hardware** expands discovery controls and diagnostics. The bottom playback bar stays visible across pages and controls play/pause, previous/next effect, blackout and brightness.
 
 ## Automatic hardware discovery
 
@@ -48,7 +48,8 @@ Only devices exposing supported Direct/Custom per-LED modes are enabled. A runni
 | Feature | Current implementation |
 |---|---|
 | Hardware RGB | Bundled OpenRGB 1.1, automatic discovery, private local transport, solid colors and independent per-LED frames |
-| Effects | 17: solid, rainbow wave, gradient, breathing, color cycle, scanner, comet, twinkle, fire, plasma, ripple, checkerboard, audio pulse, audio spectrum, screen ambience, CPU meter, game event |
+| Effects | 37 total: the original 17 plus digital rain, rain, snowfall, fireflies, ocean waves, lava lamp, watercolor, Voronoi cells, neon tunnel, galaxy, meteor shower, fireworks, lightning storm, candy stripes, sunset, fire and ice, radar, kaleidoscope, audio bars and audio rings |
+| Expanded effect controls | Scale 25–400% and density 1–100% where supported; old scenes retain defaults |
 | Spatial layout | Drag, rotate, grid/strip mapping in normalized desk coordinates |
 | LED painting | Enable Paint LEDs, click an LED with primary color; right-click erases its override |
 | Scenes | Atomic local storage, demo/hardware scopes, layout and paint, JSON import/export, five starter looks |
@@ -113,3 +114,7 @@ Original code is GPL-3.0-only. OpenRGB 1.1 is bundled as a separate GPL-licensed
 `tools/fetch_openrgb.py` prepares the platform runtime under ignored `vendor/openrgb/`. It downloads OpenRGB 1.1 x86-64 assets from the official release links, verifies fixed SHA-256 hashes, and includes the matching source archive at commit `8e16de27858cf2be6af54a33ce003df74cb9fd3e`. Linux uses an extracted AppImage, so FUSE is unnecessary. Windows uses the portable ZIP. `build.py` prepares the runtime automatically and copies it into the portable app. Source kits include the fetch tool; first setup/build needs internet, normal use does not download dependencies.
 
 `--hardware-smoke-test` checks native engine startup, SDK discovery and cleanup without lighting writes. `--hardware-config PATH` can isolate its settings for testing. `--smoke-test` remains a hardware-free demo check for CI. The current engine bundle supports x86-64 Linux/Windows builds only. Windows packaging and real hardware still need verification on the target machine.
+
+## Expanded effect collection
+
+The twenty new renderers and their thumbnail images are original Prism Light implementations. The public SignalRGB Marketplace and its Discover/customization documentation were reviewed for broad visual styles and organization; no SignalRGB scripts, paid content, game integrations or storefront images are shipped. See [effect research](docs/EFFECT-RESEARCH.md) for sources and the new effect list. New cards appear first in Discover; search matches display titles, effect names and descriptions. Scale and density are saved in scenes; older scene files remain compatible.

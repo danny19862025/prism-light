@@ -2,10 +2,10 @@
 """Gallery-first desktop shell. Artwork is painted locally from original code."""
 import math
 from PySide6.QtCore import Qt,QRectF,QPointF
-from PySide6.QtGui import QColor,QPainter,QPixmap,QLinearGradient,QRadialGradient,QPen
+from PySide6.QtGui import QColor,QPainter,QPixmap,QImage,QLinearGradient,QRadialGradient,QPen
 from PySide6.QtWidgets import (QWidget,QFrame,QLabel,QPushButton,QVBoxLayout,QHBoxLayout,
     QGridLayout,QScrollArea,QStackedWidget,QLineEdit,QButtonGroup,QSlider,QSizePolicy)
-from .effects import EFFECTS
+from .effects import EFFECTS,NEW_EFFECTS,render
 
 THEME='''
 QWidget { background:#090e16; color:#e8eaf3; font-family:"Inter","Segoe UI",sans-serif; font-size:13px; }
@@ -70,7 +70,28 @@ LOOKS=[
     ('Focus','Solid','#FFDEA5','#FFFFFF','Ambient','A single warm color. Less distraction.'),
     ('System Pulse','CPU meter','#4EC8C0','#F38084','Reactive','A live view of your CPU load.'),
     ('Game Signal','Game event','#FF6F91','#7462DC','Reactive','Color events from your own game adapter.'),
+    ('Jade Matrix','Digital rain','#28DE80','#D2FFE0','Patterns','Falling digital columns with bright leading pixels.'),
+    ('Rainfall','Rain','#3789CD','#95DFF5','Ambient','Scattered raindrops leave soft trails across your desk.'),
+    ('Snow Globe','Snowfall','#C3E5FF','#FFFFFF','Ambient','Small flakes drift slowly through cool air.'),
+    ('Firefly Meadow','Fireflies','#C9EE69','#173C30','Ambient','Warm points of light wander and gently glow.'),
+    ('Ocean Tide','Ocean waves','#103A85','#35D5DB','Ambient','Rolling turquoise waves with bright foam crests.'),
+    ('Molten Motion','Lava lamp','#F05E83','#382B81','Ambient','Soft floating blobs merge and separate.'),
+    ('Watercolor Drift','Watercolor','#F19ECF','#74D6E4','Ambient','Layered color washes drift through a fluid field.'),
+    ('Chromatic Cells','Voronoi cells','#BB79F0','#4EE6CD','Patterns','Moving color cells separated by dark edges.'),
+    ('Neon Corridor','Neon tunnel','#A64EF5','#21E2E7','Patterns','Glowing rings and spokes travel into a tunnel.'),
+    ('Spiral Galaxy','Galaxy','#7C42BB','#64C5EE','Ambient','A rotating spiral with a field of distant stars.'),
+    ('Meteor Shower','Meteor shower','#8FB7FF','#DB88F5','Patterns','Multiple diagonal trails cross the night.'),
+    ('Celebration','Fireworks','#FF975F','#D079ED','Patterns','Expanding bursts scatter colored sparks.'),
+    ('Distant Storm','Lightning storm','#304575','#E3ECFF','Ambient','Slow storm cycles brighten a dark sky.'),
+    ('Candy Ribbon','Candy stripes','#ED65AA','#7BDBE2','Patterns','Smooth diagonal ribbons in two colors.'),
+    ('Golden Hour','Sunset','#DE6682','#574FA0','Ambient','A warm sun drifts over a pink and violet horizon.'),
+    ('Fire & Ice','Fire and ice','#FF6235','#48CFF3','Patterns','Warm and cool light meet along a moving border.'),
+    ('Radar Sweep','Radar','#5CE49A','#D4FFC3','Patterns','A rotating sweep travels over subtle range rings.'),
+    ('Kaleidoscope','Kaleidoscope','#E975BE','#64DBD5','Patterns','Rotating petals form mirrored geometric patterns.'),
+    ('Equalizer Bars','Audio bars','#42D8C9','#E973B7','Reactive','Eight audio bands form rising spatial columns.'),
+    ('Resonance Rings','Audio rings','#8367E5','#4FD8E4','Reactive','Audio energy lights up concentric moving rings.'),
 ]
+GALLERY_LOOKS=[look for look in LOOKS if look[1] in NEW_EFFECTS]+[look for look in LOOKS if look[1] not in NEW_EFFECTS]
 
 def text(value,name=None):
     w=QLabel(value);w.setWordWrap(True);w.setTextFormat(Qt.PlainText)
@@ -78,6 +99,18 @@ def text(value,name=None):
     return w
 
 def artwork(effect,width=600,height=240):
+    if effect in NEW_EFFECTS:
+        # New cards preview the actual renderer, rather than unrelated artwork.
+        sw,sh=96,48
+        look=next(l for l in LOOKS if l[1]==effect)
+        settings=dict(color=look[2],secondary=look[3],brightness=100,speed=50,angle=0,gain=4)
+        inputs=dict(audio=.18,bands=[.06,.18,.11,.23,.09,.15,.05,.12])
+        coords=[(x/(sw-1),y/(sh-1)) for y in range(sh) for x in range(sw)]
+        sample=1.15 if effect=='Lightning storm' else 2.4
+        pixels=render(effect,coords,sample,settings,inputs)
+        raw=bytes(c for pixel in pixels for c in pixel)
+        image=QImage(raw,sw,sh,sw*3,QImage.Format_RGB888).copy()
+        return QPixmap.fromImage(image).scaled(width,height,Qt.IgnoreAspectRatio,Qt.SmoothTransformation)
     pix=QPixmap(width,height);pix.fill(QColor('#101624'))
     p=QPainter(pix);p.setRenderHint(QPainter.Antialiasing)
     palette={'Fire':['#210d23','#c83642','#ffb23b'], 'Gradient':['#84dde4','#c6abe9','#f6aaca'],
@@ -189,9 +222,9 @@ class Shell:
             b=QPushButton('●');b.setFixedSize(22,18);b.setAccessibleName(f'Spotlight page {index+1}')
             b.clicked.connect(lambda checked=False,i=index:self.spotlight(i));dots.addWidget(b);self.pagers.append(b)
         dots.addStretch();box.addLayout(dots);self.spotlight(0)
-        row=QHBoxLayout();row.addWidget(text('Included RGB effects','sectionTitle'));row.addStretch();row.addWidget(text('17 looks  ·  ready to customize','muted'));box.addLayout(row)
+        row=QHBoxLayout();row.addWidget(text('Included RGB effects','sectionTitle'));row.addStretch();row.addWidget(text(f'{len(LOOKS)} looks  ·  ready to customize','muted'));box.addLayout(row)
         self.grid=QGridLayout();self.grid.setSpacing(16);box.addLayout(self.grid)
-        for look in LOOKS:
+        for look in GALLERY_LOOKS:
             card=QFrame();card.setObjectName('effectCard');card.setMinimumWidth(190)
             cb=QVBoxLayout(card);cb.setContentsMargins(0,0,0,12);cb.setSpacing(10)
             art=Art(look[1]);art.setFixedHeight(160);cb.addWidget(art)
@@ -206,7 +239,7 @@ class Shell:
             widget=self.heroes.takeAt(0).widget()
             if widget:widget.deleteLater()
         for offset in (0,1):
-            look=LOOKS[(index*2+offset)%len(LOOKS)]
+            look=GALLERY_LOOKS[(index*2+offset)%len(GALLERY_LOOKS)]
             self.heroes.addWidget(Hero(look,lambda checked=False,l=look:self.choose(l)))
         for i,b in enumerate(self.pagers):b.setStyleSheet(f'background:transparent;border:0;padding:0;color:{"#c9c2ff" if i==index else "#485981"};font-size:10px;')
     def set_category(self,name):self.category=name;self.filter_cards()

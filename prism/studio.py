@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QApplication,QWidget,QVBoxLayout,QHBoxLayout,QLab
 from .ui import Window as BaseWindow,STYLE,label,button,panel
 from .hardware import Hardware
 from .backend import OpenRGB
-from .effects import EFFECTS,render,points,color
+from .effects import EFFECTS,NEW_EFFECTS,DENSITY_EFFECTS,render,points,color
 from .scenes import SceneStore,validate
 from .sources import Metrics,Audio,Events,process_names
 from .catalog import import_catalog
@@ -121,7 +121,11 @@ class Window(BaseWindow):
         self.angle=QSpinBox();self.angle.setRange(0,360);self.angle.setSuffix('°')
         self.gain=QSpinBox();self.gain.setRange(1,20);self.gain.setValue(4)
         self.fps=QSpinBox();self.fps.setRange(1,30);self.fps.setValue(20)
-        for name,w in [('Speed',self.speed),('Direction',self.angle),('Audio gain',self.gain),('Max FPS',self.fps)]:
+        self.pattern_scale=QSpinBox();self.pattern_scale.setRange(25,400);self.pattern_scale.setValue(100);self.pattern_scale.setSuffix('%')
+        self.density=QSpinBox();self.density.setRange(1,100);self.density.setValue(50);self.density.setSuffix('%')
+        self.pattern_scale.setToolTip('Pattern scale for the expanded effects collection')
+        self.density.setToolTip('Particle count or pattern density, where supported by the effect')
+        for name,w in [('Speed',self.speed),('Direction',self.angle),('Pattern scale',self.pattern_scale),('Density',self.density),('Audio gain',self.gain),('Max FPS',self.fps)]:
             controls.addRow(name,w);w.setAccessibleName(name)
         editor.insertLayout(4,controls)
         stream_row=QHBoxLayout();self.start_btn=button('Start effects',self.start_effects,True)
@@ -143,6 +147,7 @@ class Window(BaseWindow):
             if widget.text()=='127.0.0.1 :':widget.hide()
         self.mode_note.setText('Built-in hardware engine · discovery runs automatically at startup.')
         self.apply_btn.setText('Apply solid colour once')
+        self.effect_changed()
         self.shell.connection.layout().addWidget(button('Hardware diagnostics',self.show_hardware_diagnostics))
         if auto_hardware and not demo:QTimer.singleShot(0,self.connect_live)
     def layout_for(self,d):
@@ -155,7 +160,8 @@ class Window(BaseWindow):
         return self.layouts[d.key]
     def settings(self):
         return dict(color=self.color,secondary=self.secondary,brightness=self.brightness.value(),
-                    speed=self.speed.value(),angle=self.angle.value(),gain=self.gain.value())
+                    speed=self.speed.value(),angle=self.angle.value(),gain=self.gain.value(),
+                    scale=self.pattern_scale.value(),density=self.density.value())
     def scene(self):
         return dict(self.settings(),effect=self.effect.currentText(),devices=self.selected(),layouts=self.layouts,
                     paint=self.paint,scope='demo' if self.backend.demo else 'hardware')
@@ -240,7 +246,7 @@ class Window(BaseWindow):
     def build_status_tab(self):
         w=QWidget();box=QVBoxLayout(w);box.addWidget(label('System & feature coverage','title'))
         self.system_note=label('Collecting read-only CPU, memory and available OS sensors…');box.addWidget(self.system_note)
-        rows=[('Device control','OpenRGB SDK v3, per-LED direct mode'),('Lighting','17 spatial, reactive and input-driven effects'),
+        rows=[('Device control','Bundled hardware engine, automatic discovery, per-LED control'),('Lighting',f'{len(EFFECTS)} spatial, reactive and input-driven effects'),
               ('Layouts','Drag, rotate, grid/strip mapping and LED paint'),('Scenes & automation','Local scene library, import/export, time and running-app rules'),
               ('Audio','Explicit selected input; RMS and eight frequency probes'),('Screen ambience','Explicit Qt screen capture; portal-only desktops may be unavailable'),
               ('Game integrations','Authenticated local color-event API; game-specific adapters must send events'),
@@ -328,6 +334,8 @@ class Window(BaseWindow):
         if c.isValid():self.secondary=c.name().upper();self.second_btn.setText('Second colour · '+self.secondary)
     def effect_changed(self,*args):
         name=self.effect.currentText()
+        self.pattern_scale.setEnabled(name in NEW_EFFECTS)
+        self.density.setEnabled(name in DENSITY_EFFECTS)
         if name.startswith('Audio') and not self.audio.source:self.report('Enable audio input in Audio, screen & games for this effect.')
         elif name=='Screen ambience' and not self.screen_enabled:self.report('Enable screen capture in Audio, screen & games for this effect.')
         elif name=='Game event' and not self.events.server:self.report('Start local event input to receive colors from your own game adapter.')
@@ -446,6 +454,7 @@ class Window(BaseWindow):
         self.set_color(s['color']);self.secondary=s['secondary'];self.second_btn.setText('Second colour · '+self.secondary)
         self.effect.setCurrentText(s['effect']);self.brightness.setValue(s['brightness'])
         self.speed.setValue(s['speed']);self.angle.setValue(s['angle']);self.gain.setValue(s['gain'])
+        self.pattern_scale.setValue(s.get('scale',100));self.density.setValue(s.get('density',50))
         self.layouts=json.loads(json.dumps(s.get('layouts',{})));self.paint=json.loads(json.dumps(s.get('paint',{})))
         for key,check in self.checks.items():check.setChecked(key in s['devices'] and bool(check.property('supported')))
         for d in self.devices:self.layout_for(d)
