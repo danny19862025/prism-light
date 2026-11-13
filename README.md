@@ -1,6 +1,6 @@
 # Prism Light Studio
 
-An independent RGB desktop studio for **Windows and Linux**, extending the original Prism Light app. OpenRGB supplies hardware detection and access through its localhost SDK server; Prism Light supplies spatial effects, desk layouts, painted LEDs, scenes and lighting automation.
+An independent RGB desktop studio for **Windows and Linux**, extending the original Prism Light app. Prism Light includes OpenRGB 1.1 as its hardware engine and manages device discovery automatically. No separate OpenRGB installation, server startup or connection step is needed. Spatial effects, desk layouts, painted LEDs, scenes and lighting automation share one interface.
 
 ![Actual Studio interface in demo mode](docs/studio.png)
 
@@ -15,6 +15,7 @@ From source:
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python tools/fetch_openrgb.py
 .venv/bin/python main.py --demo
 ```
 
@@ -22,7 +23,7 @@ Or use `./Run-PrismLight.sh --demo` after setup.
 
 ## Run or build on Windows
 
-Install 64-bit Python 3.12–3.14 with its launcher. Extract the source kit, then double-click **Demo-Windows.cmd** or **Run-PrismLight.cmd**. Setup creates a virtual environment and installs the pinned dependency on first use.
+Install 64-bit Python 3.12–3.14 with its launcher. Extract the source kit, then double-click **Demo-Windows.cmd** or **Run-PrismLight.cmd**. Setup creates a virtual environment, installs the pinned dependency and downloads the checksum-pinned hardware runtime on first use.
 
 Double-click **Build-Windows.cmd** on Windows to test and build `dist/PrismLight-windows.zip`, containing `PrismLight.exe` and its support files. Keep the whole portable folder together. **This Studio revision has not yet been built or run on Windows.** The previous foundation EXE is not this Studio release. PyInstaller builds Windows executables on Windows; the supplied Linux binary is not a Windows EXE.
 
@@ -30,23 +31,23 @@ The GitHub Actions workflow runs Windows and Ubuntu tests/builds on pushes and p
 
 ## Desktop layout
 
-The Discover page has a searchable, categorized gallery of the 17 included effects and a five-page spotlight carousel. Select **Use effect** to open its lighting editor. The left sidebar opens scenes, lighting/devices, layouts, macros, monitoring, audio/screen inputs and protocol references. **Connection** expands the OpenRGB controls. The bottom playback bar stays visible across pages and controls play/pause, previous/next effect, blackout and brightness.
+The Discover page has a searchable, categorized gallery of the 17 included effects and a five-page spotlight carousel. Select **Use effect** to open its lighting editor. The left sidebar opens scenes, lighting/devices, layouts, macros, monitoring, audio/screen inputs and protocol references. **Hardware** expands discovery controls and diagnostics. The bottom playback bar stays visible across pages and controls play/pause, previous/next effect, blackout and brightness.
 
-## Connect hardware
+## Automatic hardware discovery
 
-1. Install [OpenRGB](https://openrgb.org/) and check which devices it detects. Follow its platform-specific device/permission setup.
-2. Start OpenRGB's **SDK Server**, normally port **6742**. Keep OpenRGB running; use localhost binding where configurable.
-3. In Prism Light choose **Connect OpenRGB** and select devices. Devices must advertise Direct/Custom per-LED color support. Unsupported/ambiguous devices remain disabled.
-4. Select an effect, colors, brightness and speed. **Start effects** streams lighting. **Stop** leaves the last frame. **Blackout** sends black after any current write.
-5. Arrange devices in **Desk & LEDs**, or edit X/Y, width, height, rotation and grid columns. Save a scene to keep the arrangement.
+Open Prism Light normally. It starts its bundled hardware engine in the background and lists detected devices. Choose an effect and press Play. **Devices** shows the inventory; **Scan devices** releases and restarts only Prism Light's own engine to refresh discovery. Demo mode does not start hardware discovery.
 
-One effect controller should drive a device at a time. SDK v3 writes have no hardware acknowledgement: sent does not mean a physical LED was verified. Hotplug/rescan invalidates indexed device control and requires reconnecting. Prism Light does not change LED counts, write firmware, install drivers or control fan/pump speeds.
+The engine is a separate bundled process, runs as your user, uses a private loopback port and is stopped when Prism Light closes. It does not connect to or shut down a separately installed OpenRGB server. You do not need to configure a port. Stop competing RGB controllers before controlling the same device.
+
+On Linux, USB/I2C access can still require a one-time system udev-rule installation. Bundling software cannot grant kernel permissions. **Hardware → Hardware diagnostics** shows the engine log and can copy a setup command for your terminal. Install the rules, reconnect USB devices, and scan again. On Windows, some motherboard/RAM controllers need the upstream PawnIO driver and administrator setup; this app does not silently install kernel drivers.
+
+Only devices exposing supported Direct/Custom per-LED modes are enabled. A running engine with zero devices means discovery completed without visible supported hardware, not that physical compatibility has been established. SDK writes have no physical acknowledgement. **Stop** leaves the last frame; **Blackout** sends black. No firmware writes, LED-count changes or fan/pump writes are sent by Prism Light.
 
 ## Feature coverage
 
 | Feature | Current implementation |
 |---|---|
-| Hardware RGB | OpenRGB SDK v3, IPv4 localhost, solid colors and independent per-LED frames |
+| Hardware RGB | Bundled OpenRGB 1.1, automatic discovery, private local transport, solid colors and independent per-LED frames |
 | Effects | 17: solid, rainbow wave, gradient, breathing, color cycle, scanner, comet, twinkle, fire, plasma, ripple, checkerboard, audio pulse, audio spectrum, screen ambience, CPU meter, game event |
 | Spatial layout | Drag, rotate, grid/strip mapping in normalized desk coordinates |
 | LED painting | Enable Paint LEDs, click an LED with primary color; right-click erases its override |
@@ -105,4 +106,10 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python main.py --smoke-test
 
 See [validation](docs/VALIDATION.md) for results. Tests cover TCP framing, per-LED packet content, topology errors, invalid frames, effect bounds, blackout, scenes, inert plugin parsing, authenticated HTTP events, automation and GUI streaming.
 
-Original code is GPL-3.0-only. OpenRGB remains a separately installed GPLv2 program. Retain [third-party notices](THIRD_PARTY_NOTICES.md) and licenses. This is a local development package, not a public release or a SignalRGB-affiliated product. Earlier foundation documentation is retained in [FOUNDATION.md](docs/FOUNDATION.md); the table above describes current capabilities.
+Original code is GPL-3.0-only. OpenRGB 1.1 is bundled as a separate GPL-licensed process, with its exact source archive, upstream license, asset hashes and provenance manifest in `hardware/openrgb/`. Retain [third-party notices](THIRD_PARTY_NOTICES.md) and licenses. This is a local development package, not a public release or a SignalRGB-affiliated product. Earlier foundation documentation is retained in [FOUNDATION.md](docs/FOUNDATION.md); the table above describes current capabilities.
+
+## Bundled engine provenance and build checks
+
+`tools/fetch_openrgb.py` prepares the platform runtime under ignored `vendor/openrgb/`. It downloads OpenRGB 1.1 x86-64 assets from the official release links, verifies fixed SHA-256 hashes, and includes the matching source archive at commit `8e16de27858cf2be6af54a33ce003df74cb9fd3e`. Linux uses an extracted AppImage, so FUSE is unnecessary. Windows uses the portable ZIP. `build.py` prepares the runtime automatically and copies it into the portable app. Source kits include the fetch tool; first setup/build needs internet, normal use does not download dependencies.
+
+`--hardware-smoke-test` checks native engine startup, SDK discovery and cleanup without lighting writes. `--hardware-config PATH` can isolate its settings for testing. `--smoke-test` remains a hardware-free demo check for CI. The current engine bundle supports x86-64 Linux/Windows builds only. Windows packaging and real hardware still need verification on the target machine.

@@ -8,13 +8,15 @@ import subprocess
 import sys
 
 root=Path(__file__).resolve().parent
+subprocess.run([sys.executable,str(root/'tools'/'fetch_openrgb.py')],cwd=root,check=True)
 subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--onedir',
                 '--windowed','--name','PrismLight',str(root/'main.py')],cwd=root,check=True)
 bundle=root/'dist'/'PrismLight'
 for name in ('LICENSE','README.md','THIRD_PARTY_NOTICES.md','requirements.txt','requirements-build.txt','build.py','main.py','Setup-Windows.cmd','Run-PrismLight.cmd','Demo-Windows.cmd','Build-Windows.cmd','Run-PrismLight.sh'):
     shutil.copy2(root/name,bundle/name)
-for name in ('prism','tests','licenses','docs'):
+for name in ('prism','tests','licenses','docs','tools'):
     shutil.copytree(root/name,bundle/name,dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__'))
+shutil.copytree(root/'vendor'/'openrgb',bundle/'hardware'/'openrgb',dirs_exist_ok=True)
 notices=bundle/'licenses'/'installed-package-notices'
 for distribution in distributions():
     package=distribution.metadata['Name']

@@ -14,8 +14,10 @@ from PySide6.QtGui import QColor,QPainter,QPen,QLinearGradient
 from PySide6.QtWidgets import (QApplication,QWidget,QVBoxLayout,QHBoxLayout,QLabel,
     QPushButton,QComboBox,QSlider,QSpinBox,QDoubleSpinBox,QTabWidget,QFormLayout,
     QFileDialog,QInputDialog,QMessageBox,QTableWidget,QTableWidgetItem,QHeaderView,
-    QLineEdit,QCheckBox,QAbstractItemView,QScrollArea,QLayout)
+    QLineEdit,QCheckBox,QAbstractItemView,QScrollArea,QLayout,QDialog,QPlainTextEdit)
 from .ui import Window as BaseWindow,STYLE,label,button,panel
+from .hardware import Hardware
+from .backend import OpenRGB
 from .effects import EFFECTS,render,points,color
 from .scenes import SceneStore,validate
 from .sources import Metrics,Audio,Events,process_names
@@ -60,7 +62,7 @@ class DeskCanvas(QWidget):
                 if self.editable:self.hit.append((d.key,i,QRectF(pos.x()-7,pos.y()-7,14,14)))
         p.setPen(QColor('#8f9db9'))
         text='Click an LED to paint • drag a device to arrange' if self.editable else 'Live spatial preview • hardware writes require Start effects'
-        if not self.studio.devices:text='Connect OpenRGB or enter demo mode to preview your desk'
+        if not self.studio.devices:text='Discovering devices…' if self.studio.future else 'No devices detected. Check device access or try demo mode.'
         p.drawText(20,self.height()-12,text)
     def mousePressEvent(self,event):
         if not self.editable:return
@@ -83,7 +85,8 @@ class DeskCanvas(QWidget):
     def mouseReleaseEvent(self,event):self.drag=None
 
 class Window(BaseWindow):
-    def __init__(self,demo=False,preset_path=None,scene_path=None):
+    def __init__(self,demo=False,preset_path=None,scene_path=None,auto_hardware=False,hardware=None):
+        self.hardware=hardware or Hardware()
         self.layouts={};self.paint={};self.preview_frames={};self.streaming=False
         self.started=time.monotonic();self.sent_frames=0;self.last_send=0;self.last_sample=0
         self.inputs={};self.metrics=Metrics();self.audio=Audio();self.events=Events()
@@ -133,6 +136,15 @@ class Window(BaseWindow):
         self.reload_scenes();self.refresh_controls()
         from .shell import Shell
         self.shell=Shell(self)
+        self.connect_btn.setText('Scan devices')
+        self.disconnect_btn.setText('Release devices')
+        self.port.hide()
+        for widget in self.shell.connection.findChildren(QLabel):
+            if widget.text()=='127.0.0.1 :':widget.hide()
+        self.mode_note.setText('Built-in hardware engine · discovery runs automatically at startup.')
+        self.apply_btn.setText('Apply solid colour once')
+        self.shell.connection.layout().addWidget(button('Hardware diagnostics',self.show_hardware_diagnostics))
+        if auto_hardware and not demo:QTimer.singleShot(0,self.connect_live)
     def layout_for(self,d):
         if d.key not in self.layouts:
             n=next((i for i,v in enumerate(self.devices) if v.key==d.key),0)
@@ -253,6 +265,10 @@ class Window(BaseWindow):
             for w in (self.connect_btn,self.demo_btn,self.disconnect_btn,self.apply_btn):w.setEnabled(False)
     def render_devices(self):
         super().render_devices()
+        if not self.devices:
+            for widget in self.centralWidget().findChildren(QLabel):
+                if widget.text().startswith('Your lighting will appear here.'):
+                    widget.setText('Your devices appear here after automatic discovery.\nUse Scan devices to retry, or enter demo mode.')
         if hasattr(self,'layout_device'):
             self.layout_device.clear()
             for d in self.devices:
@@ -261,6 +277,36 @@ class Window(BaseWindow):
     def did_connect(self,devices):
         super().did_connect(devices)
         if hasattr(self,'stream_status'):self.stream_status.setText('Stopped · preview only')
+        if not self.backend.demo:
+            self.status.setText(f'●  Hardware ready · {len(devices)} device(s)')
+            self.mode_note.setText('Bundled OpenRGB engine · managed by Prism Light')
+            self.report('Hardware ready. Select an effect and press Play.' if devices else
+                'No devices detected. Check USB access permissions and supported hardware in Devices.')
+    def connect_live(self):
+        if self.future:return
+        self.disconnect();self.backend=OpenRGB()
+        self.status.setText('◌  Discovering your devices…')
+        self.mode_note.setText('Starting the built-in hardware engine…')
+        self.job(lambda:self.hardware.connect(self.backend),self.did_connect)
+    def connection_error(self,error):
+        self.report(f'{error} Open Devices to retry discovery or view hardware diagnostics.',True)
+    def show_hardware_diagnostics(self):
+        dialog=QDialog(self);dialog.setWindowTitle('Hardware diagnostics');dialog.resize(780,520)
+        layout=QVBoxLayout(dialog)
+        layout.addWidget(label('The hardware engine is included in Prism Light. Device access still depends on your operating system and supported hardware.'))
+        output=QPlainTextEdit();output.setReadOnly(True);output.setPlainText(self.hardware.diagnostics());layout.addWidget(output)
+        if sys.platform.startswith('linux'):
+            layout.addWidget(label('If the log reports missing udev rules, install device-access rules once, reconnect USB devices, then scan again.'))
+            def copy_setup():
+                import shlex
+                try:
+                    exe=shlex.quote(str(self.hardware.executable))
+                    command='mkdir -p "$HOME/.config/PrismLight" && '+exe+' --generate-udev-rules "$HOME/.config/PrismLight/60-openrgb.rules" && sudo install -D -m 644 "$HOME/.config/PrismLight/60-openrgb.rules" /etc/udev/rules.d/60-openrgb.rules && sudo udevadm control --reload-rules && sudo udevadm trigger'
+                    QApplication.clipboard().setText(command);self.report('Linux device-access command copied. Run it in your terminal, then scan again.')
+                except Exception as e:self.report(str(e),True)
+            layout.addWidget(button('Copy Linux device-access setup command',copy_setup))
+        else:layout.addWidget(label('Some Windows motherboard/RAM controllers require the upstream PawnIO driver and administrator setup. Bundling the engine does not install a kernel driver.'))
+        layout.addWidget(button('Close',dialog.accept));dialog.exec()
     def sync_layout_controls(self,*args):
         key=self.layout_device.currentData()
         if not key or key not in self.layouts:return
@@ -303,6 +349,8 @@ class Window(BaseWindow):
         self.streaming=False
         self.pending_blackout=False
         super().disconnect()
+        self.hardware.close()
+        self.mode_note.setText('Built-in hardware engine · press Scan devices to discover hardware.')
         if hasattr(self,'stream_status'):self.stream_status.setText('Stopped · disconnected')
     def tick(self):
         super().tick()
@@ -477,15 +525,26 @@ class Window(BaseWindow):
             for j,key in enumerate(('name','vendor','product','status')):self.catalog_table.setItem(i,j,QTableWidgetItem(r[key]))
     def closeEvent(self,event):
         self.streaming=False;self.audio.stop();self.events.close()
+        self.hardware.cancel.set()
         self.monitor_pool.shutdown(wait=True,cancel_futures=True)
         super().closeEvent(event)
+        self.hardware.close()
 
 def main():
     parser=argparse.ArgumentParser(description='Prism Light Studio: local spatial RGB control')
     parser.add_argument('--demo',action='store_true');parser.add_argument('--smoke-test',action='store_true')
     parser.add_argument('--screenshot',help='Save a demo screenshot and exit')
+    parser.add_argument('--hardware-smoke-test',action='store_true',help='Verify bundled engine discovery and cleanup without lighting writes')
+    parser.add_argument('--hardware-config',help='Override the hardware settings directory')
     args=parser.parse_args();app=QApplication(sys.argv[:1]);app.setStyle('Fusion');app.setStyleSheet(STYLE+'''\nQTabWidget::pane { border:0; } QTabBar::tab { background:#191e2d; color:#a8b5d0; padding:12px 14px; border-bottom:2px solid transparent; } QTabBar::tab:selected { color:#d9ccff; border-bottom:2px solid #b6a7ff; } QTableWidget { background:#151b29; gridline-color:#30374c; } QHeaderView::section { background:#252d42; padding:10px; border:0; }''')
-    window=Window(demo=args.demo or args.smoke_test or bool(args.screenshot));window.show()
+    window=Window(demo=args.demo or args.smoke_test or bool(args.screenshot),auto_hardware=not(args.demo or args.smoke_test or args.screenshot),hardware=Hardware(config=args.hardware_config));window.show()
+    if args.hardware_smoke_test:
+        def hardware_check():
+            if window.future:return
+            valid=window.connected and not window.backend.demo and window.hardware.process is not None
+            window.close();app.exit(0 if valid else 1)
+        check_timer=QTimer(window);check_timer.timeout.connect(hardware_check);check_timer.start(100)
+        QTimer.singleShot(50000,lambda:(window.close(),app.exit(1)))
     if args.smoke_test or args.screenshot:
         def smoke():
             valid=window.connected and window.backend.demo and len(window.devices)==3

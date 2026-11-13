@@ -4,7 +4,7 @@ Environment: Linux x86-64, Python 3.14.9, PySide6/Qt 6.10.1, PyInstaller 6.17.0.
 
 ## Verified locally
 
-- 25 automated tests: SDK negotiation/framing, fragmented responses, timeout/refusal/disconnect, invalid/old packets, parsing, device-list change rejection, unsupported-device isolation, independent LED bytes and Direct-mode initialization once per session.
+- 30 automated tests: SDK negotiation/framing, fragmented responses, timeout/refusal/disconnect, invalid/old packets, parsing, device-list change rejection, unsupported-device isolation, independent LED bytes and Direct-mode initialization once per session.
 - Frame validation rejects wrong lengths, invalid colors and unknown device identities before lighting writes.
 - All 17 effects return bounded RGB output; zero brightness renders black and screen-grid mapping is checked.
 - Scene round-trip, invalid parameter rejection and corrupt-file preservation.
@@ -28,3 +28,9 @@ No hardware compatibility list, exact SignalRGB parity or public-release certifi
 ## Gallery redesign
 
 The dark sidebar, effect gallery, spotlight carousel and persistent playback bar use original Qt-painted artwork. A GUI test verifies category/search filtering, effect-card navigation, playback and brightness synchronization. Existing device, scene, streaming and blackout tests remain in place. Source and packaged startup are checked after rebuilding.
+
+## Bundled hardware engine
+
+The managed engine is tested with a real child-process SDK fixture: automatic private-port negotiation, missing/escaping executable rejection, readiness cancellation, environment isolation and child cleanup. Studio integration is tested through the managed discovery entry point with no port controls. Source startup against the actual pinned Linux OpenRGB 1.1 runtime completed SDK negotiation with zero devices visible in the sandbox and shut down the child cleanly. Zero visible devices is not a hardware-compatibility result.
+
+The portable engine includes checksum-verified official assets, its original license and the exact matching OpenRGB source archive. Windows asset integrity and archive layout are verified locally; Windows execution remains unverified. `--hardware-smoke-test` exercises actual engine startup and shutdown in the portable Linux build without LED writes. Demo startup never launches the hardware engine.

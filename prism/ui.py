@@ -210,7 +210,7 @@ class Window(QMainWindow):
                 self.backend.close()
                 self.connected = False
                 self.status.setText('○  Disconnected / error')
-                self.report(f'{e} Check OpenRGB → SDK Server → Start Server, port {self.port.value()}, then reconnect.',True)
+                self.connection_error(e)
             self.refresh_controls()
         self.health_tick += 1
         if self.health_tick >= 40:
@@ -226,6 +226,8 @@ class Window(QMainWindow):
         self.mode_note.setText('Start OpenRGB’s SDK server, then connect.')
         self.report('Disconnected. Last lighting may remain on hardware.')
         self.refresh_controls()
+    def connection_error(self,error):
+        self.report(f'{error} Check OpenRGB → SDK Server → Start Server, port {self.port.value()}, then reconnect.',True)
     def connect_live(self):
         self.disconnect()
         self.backend = OpenRGB()

@@ -2,11 +2,15 @@
 
 Prism Light is original GPL-3.0-only software; copyright (C) 2026 Prism Light contributors. The full license is in LICENSE. No SignalRGB binaries, scripts, QML, graphics or runtime are bundled. Architecture research used a locally supplied installer. The optional reference importer reads names and USB IDs from caller-supplied recovered source as inert text; it does not execute or redistribute that source.
 
-## OpenRGB (separate user-installed backend)
+## OpenRGB 1.1 (bundled separate process)
 
-OpenRGB upstream: https://gitlab.com/CalcProgrammer1/OpenRGB
+Upstream: https://codeberg.org/OpenRGB/OpenRGB and https://openrgb.org/releases.html
 
-OpenRGB's LICENSE is GNU General Public License version 2, June 1991. Its source files retain their respective author copyright notices (including Adam Honse / CalcProgrammer1 and other contributors). The official checkout used for reference is unchanged at revision `4e7aa49d68aca6c959eb2a9b48a6d6fc35f744a6`. A verbatim copy of its LICENSE is retained as `licenses/OpenRGB-GPL-2.0.txt`. No OpenRGB source, drivers, binaries, graphics or branding are incorporated into this app. The SDK documentation was used to independently implement packet encoding and parsing. OpenRGB is not included in the packaged app; users obtain it separately with its own notices.
+Prism Light bundles the official x86-64 OpenRGB 1.1 runtime as a separate executable process. Its exact commit is `8e16de27858cf2be6af54a33ce003df74cb9fd3e`. Original author/contributor notices are retained. The runtime is not linked into Prism Light's Python/Qt process; the independently implemented SDK v3 client communicates on a private loopback port.
+
+`tools/fetch_openrgb.py` pins release and source SHA-256 digests. Each portable app contains `hardware/openrgb/manifest.json`, `OpenRGB-LICENSE.txt`, `NOTICE.txt`, the matching source tarball under `source/`, and the original runtime files and their supplied library notices. The source archive is copied without modification; the runtime comes directly from the official AppImage/portable ZIP. Source-only distributions include the reproducible fetch tool instead of the binary assets.
+
+OpenRGB's upstream license text is GPL version 2; individual files retain their applicable terms and copyright notices. The historical SDK-reference license remains under `licenses/OpenRGB-GPL-2.0.txt`. Keep the bundled runtime notices and exact source archive when redistributing. For public releases, review corresponding-source obligations for every bundled runtime library as well as OpenRGB and Qt; the local development bundle does not itself certify public-release readiness. Bundling does not install the Windows PawnIO kernel driver or grant Linux device permissions.
 
 ## Qt for Python / PySide6 / Shiboken6 / Qt
 

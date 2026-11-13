@@ -140,6 +140,18 @@ class StudioUITests(unittest.TestCase):
         shell.toggle();self.assertFalse(w.streaming)
         shell.volume.setValue(35);self.assertEqual(w.brightness.value(),35)
         shell.navigate(None,'Discover');self.assertEqual(shell.stack.currentIndex(),0)
+    def test_builtin_hardware_discovery_uses_managed_engine(self):
+        from prism.backend import Demo
+        w=self.w
+        def discover(backend):
+            backend.devices=Demo().devices
+            return backend.devices
+        with patch.object(w.hardware,'connect',side_effect=discover) as connect:
+            w.connect_live();self.spin(.3)
+            connect.assert_called_once()
+            self.assertTrue(w.connected);self.assertFalse(w.backend.demo)
+            self.assertEqual(w.connect_btn.text(),'Scan devices')
+            self.assertTrue(w.port.isHidden());self.assertIn('Hardware ready',w.status.text())
     def test_blackout_waits_for_inflight_frame(self):
         import threading
         w=self.w;gate=threading.Event();original=w.backend.apply_frame

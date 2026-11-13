@@ -34,6 +34,14 @@ jobs:
           env = dict(os.environ, QT_QPA_PLATFORM='offscreen')
           exe = 'dist/PrismLight/PrismLight.exe' if sys.platform == 'win32' else 'dist/PrismLight/PrismLight'
           subprocess.run([exe, '--smoke-test'], env=env, timeout=30, check=True)
+      - name: Check bundled Linux hardware engine lifecycle
+        if: runner.os == 'Linux'
+        shell: python
+        run: |
+          import os, subprocess, tempfile
+          env = dict(os.environ, QT_QPA_PLATFORM='offscreen')
+          with tempfile.TemporaryDirectory() as config:
+              subprocess.run(['dist/PrismLight/PrismLight', '--hardware-smoke-test', '--hardware-config', config], env=env, timeout=60, check=True)
       - uses: actions/upload-artifact@v4
         with:
           name: PrismLight-Studio-${{ runner.os }}

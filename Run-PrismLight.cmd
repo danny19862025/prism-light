@@ -10,6 +10,10 @@ if errorlevel 1 (
   call Setup-Windows.cmd
   if errorlevel 1 goto failed
 )
+if not exist "vendor\openrgb\manifest.json" (
+  ".venv\Scripts\python.exe" tools\fetch_openrgb.py
+  if errorlevel 1 goto failed
+)
 ".venv\Scripts\python.exe" main.py %*
 if errorlevel 1 goto failed
 exit /b 0

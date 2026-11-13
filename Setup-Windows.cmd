@@ -22,7 +22,9 @@ if errorlevel 1 (
 )
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 exit /b 1
-echo Windows setup complete.
+".venv\Scripts\python.exe" tools\fetch_openrgb.py
+if errorlevel 1 exit /b 1
+echo Windows setup complete, including bundled hardware support.
 exit /b 0
 :missing_python
 echo Install 64-bit Python 3.12, 3.13 or 3.14 from https://www.python.org/downloads/windows/

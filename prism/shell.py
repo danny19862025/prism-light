@@ -148,12 +148,12 @@ class Shell:
             b.clicked.connect(lambda checked=False,t=target,n=name:self.navigate(t,n));self.group.addButton(b);nav.addWidget(b);self.nav_buttons.append(b);self.nav_map[name]=b
         self.nav_buttons[0].setChecked(True);nav.addStretch()
         self.side_status=text('○  Offline','muted');nav.addWidget(self.side_status)
-        b=QPushButton('⚙   Connection');b.setObjectName('nav');b.clicked.connect(self.show_connection);nav.addWidget(b)
+        b=QPushButton('⚙   Hardware');b.setObjectName('nav');b.clicked.connect(self.show_connection);nav.addWidget(b)
         version=text('LOCAL FIRST','brandSub');nav.addWidget(version);rootbox.addWidget(side)
         right=QWidget();rightbox=QVBoxLayout(right);rightbox.setContentsMargins(0,0,0,0);rightbox.setSpacing(0);rootbox.addWidget(right,1)
         top=QFrame();top.setObjectName('topbar');topbox=QHBoxLayout(top);topbox.setContentsMargins(24,9,24,9)
         self.breadcrumb=text('Discover','muted');topbox.addWidget(self.breadcrumb);topbox.addStretch()
-        self.connection_button=QPushButton('○  Connect devices');self.connection_button.clicked.connect(self.show_connection);topbox.addWidget(self.connection_button)
+        self.connection_button=QPushButton('◌  Detecting devices');self.connection_button.clicked.connect(self.show_connection);topbox.addWidget(self.connection_button)
         rightbox.addWidget(top)
         notice=text('Your space, in sync.  All effects included.  Everything stays on this computer.','notice');notice.setAlignment(Qt.AlignCenter);rightbox.addWidget(notice)
         self.connection.setVisible(False);rightbox.addWidget(self.connection)
@@ -240,12 +240,16 @@ class Shell:
         index=EFFECTS.index(self.w.effect.currentText());self.w.effect.setCurrentText(EFFECTS[(index+delta)%len(EFFECTS)])
     def toggle(self):
         if self.w.streaming:self.w.stop_effects()
-        elif not self.w.connected:self.connection.show();self.w.report('Connect OpenRGB or enter demo mode before starting playback.')
+        elif not self.w.connected:
+            if not self.w.future:self.w.connect_live()
+            self.w.report('Discovering your hardware. Playback will be available when supported devices appear.')
         else:self.w.start_effects()
     def refresh(self):
         self.play.setText('Ⅱ' if self.w.streaming else '▶')
         if self.w.connected:
             message='●  Demo devices' if self.w.backend.demo else f'●  {len(self.w.devices)} devices'
             self.side_status.setText(message);self.connection_button.setText(message)
-        else:self.side_status.setText('○  Offline');self.connection_button.setText('○  Connect devices')
+        else:
+            message='◌  Scanning devices' if self.w.future else '○  No hardware active'
+            self.side_status.setText(message);self.connection_button.setText(message)
         self.track_info.setText('DEMO · simulated lighting' if self.w.backend.demo and self.w.connected else 'Prism Light · local effect')
