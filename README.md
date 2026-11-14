@@ -23,6 +23,10 @@ Or use `./Run-PrismLight.sh --demo` after setup.
 
 ## Run or build on Windows
 
+Start with **Install-Windows.cmd** in the source or portable Windows package. Windows setup now installs the official PawnIO 2.2.0 prerequisite when its service is absent. It downloads directly from the upstream release and checks its pinned SHA-256 and Authenticode publisher before opening the official installation wizard. Complete the wizard and approve the Windows administrator prompt. Cancelled or failed driver setup stops installation and can be retried. Existing PawnIO installations are retained. Internet is required for the first driver download.
+
+Use **Run-PrismLight.cmd** for source hardware sessions or **Install-Windows.cmd** for packaged hardware sessions: these launch with administrator privileges so OpenRGB can use PawnIO. Opening the packaged EXE directly still requires **Run as administrator** for motherboard/RAM access. Demo and smoke-test source launches skip driver installation and elevation. Build-Windows.cmd uses `Setup-Windows.cmd --no-driver`, so building does not install a kernel driver. Restart Windows if the PawnIO installer requests it. Installing the prerequisite does not guarantee support for every RGB device.
+
 Install 64-bit Python 3.12–3.14 with its launcher. Extract the source kit, then double-click **Demo-Windows.cmd** or **Run-PrismLight.cmd**. Setup creates a virtual environment, installs the pinned dependency and downloads the checksum-pinned hardware runtime on first use.
 
 Double-click **Build-Windows.cmd** on Windows to test and build `dist/PrismLight-windows.zip`, containing `PrismLight.exe` and its support files. Keep the whole portable folder together. **This Studio revision has not yet been built or run on Windows.** The previous foundation EXE is not this Studio release. PyInstaller builds Windows executables on Windows; the supplied Linux binary is not a Windows EXE.
@@ -39,7 +43,7 @@ Open Prism Light normally. It starts its bundled hardware engine in the backgrou
 
 The engine is a separate bundled process, runs as your user, uses a private loopback port and is stopped when Prism Light closes. It does not connect to or shut down a separately installed OpenRGB server. You do not need to configure a port. Stop competing RGB controllers before controlling the same device.
 
-On Linux, USB/I2C access can still require a one-time system udev-rule installation. Bundling software cannot grant kernel permissions. **Hardware → Hardware diagnostics** shows the engine log and can copy a setup command for your terminal. Install the rules, reconnect USB devices, and scan again. On Windows, some motherboard/RAM controllers need the upstream PawnIO driver and administrator setup; this app does not silently install kernel drivers.
+On Linux, USB/I2C access can still require a one-time system udev-rule installation. Bundling software cannot grant kernel permissions. **Hardware → Hardware diagnostics** shows the engine log and can copy a setup command for your terminal. Install the rules, reconnect USB devices, and scan again. On Windows, the default setup opens the official PawnIO installer when needed; driver installation requires the user's Windows administrator approval.
 
 Only devices exposing supported Direct/Custom per-LED modes are enabled. A running engine with zero devices means discovery completed without visible supported hardware, not that physical compatibility has been established. SDK writes have no physical acknowledgement. **Stop** leaves the last frame; **Blackout** sends black. No firmware writes, LED-count changes or fan/pump writes are sent by Prism Light.
 

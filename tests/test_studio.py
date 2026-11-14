@@ -36,7 +36,7 @@ class FrameTests(unittest.TestCase):
         self.assertEqual(frames[0],struct.pack('<IH',14,2)+bytes([255,0,0,0,0,255,64,0]))
         self.assertEqual(frames[1][-8:],bytes([0,0,255,0,15,20,25,0]))
     def test_invalid_frame_and_topology_do_not_write(self):
-        for action in ('normal','changed'):
+        for action in ('normal','grown'):
             with self.subTest(action=action):
                 server=Server(action);client=OpenRGB()
                 try:
@@ -44,7 +44,7 @@ class FrameTests(unittest.TestCase):
                     with self.assertRaises(ValueError):client.apply_frame({d.key:[(255,0,0)]})
                     with self.assertRaises(ValueError):client.apply_frame({d.key:[(256,0,0),(0,0,0)]})
                     with self.assertRaises(SDKError):client.apply_frame({'missing':[(0,0,0)]})
-                    if action=='changed':
+                    if action=='grown':
                         with self.assertRaises(SDKError):client.apply_frame({d.key:[(0,0,0)]*2})
                 finally:client.close();server.finish()
                 self.assertFalse(any(c[1] in (1050,1101) for c in server.commands))
@@ -184,5 +184,44 @@ class StudioUITests(unittest.TestCase):
             gate.set();self.spin(.4)
             self.assertFalse(w.pending_blackout);self.assertFalse(w.streaming)
             self.assertTrue(all(p==(0,0,0) for pixels in w.backend.last_frame.values() for p in pixels))
+
+    def live_session(self):
+        """A non-demo session with a fake running engine and fake SDK client."""
+        from prism.backend import Demo
+        from unittest.mock import MagicMock
+        w=self.w;fake=Demo();fake.demo=False;connects=[]
+        def reconnect(port):connects.append(port);return fake.devices
+        fake.connect=reconnect
+        w.backend=fake;w.did_connect(fake.devices)
+        w.hardware.process=MagicMock();w.hardware.process.poll.return_value=None;w.hardware.port=50123
+        return w,fake,connects
+    def test_frame_hiccup_reconnects_and_resumes_effects(self):
+        w,fake,connects=self.live_session()
+        try:
+            calls=[]
+            def flaky(frames):
+                calls.append(1)
+                if len(calls)==1:raise SDKError('OpenRGB response timed out.')
+                fake.last_frame=frames;return len(frames)
+            fake.apply_frame=flaky
+            # The fake reconnect returns the same (fake) backend's devices.
+            with patch('prism.studio.OpenRGB',return_value=fake):
+                w.start_effects();self.spin(.6)
+            self.assertEqual(connects,[50123])
+            self.assertTrue(w.connected);self.assertTrue(w.streaming);self.assertFalse(w.recovering)
+            self.assertGreater(len(calls),1)
+        finally:
+            w.hardware.process=None;w.streaming=False
+    def test_repeated_failures_stop_instead_of_looping(self):
+        w,fake,connects=self.live_session()
+        try:
+            def broken(frames):raise SDKError('OpenRGB response timed out.')
+            fake.apply_frame=broken
+            w.start_effects();self.spin(1.2)
+            self.assertEqual(len(connects),3)
+            self.assertFalse(w.connected);self.assertFalse(w.streaming);self.assertFalse(w.recovering)
+            self.assertIn('timed out',w.feedback.text())
+        finally:
+            w.hardware.process=None
 
 if __name__=='__main__':unittest.main()

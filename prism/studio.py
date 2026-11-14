@@ -16,12 +16,13 @@ from PySide6.QtWidgets import (QApplication,QWidget,QVBoxLayout,QHBoxLayout,QLab
     QFileDialog,QInputDialog,QMessageBox,QTableWidget,QTableWidgetItem,QHeaderView,
     QLineEdit,QCheckBox,QAbstractItemView,QScrollArea,QLayout,QDialog,QPlainTextEdit)
 from .ui import Window as BaseWindow,STYLE,label,button,panel
-from .hardware import Hardware
+from .hardware import Hardware,conflict_advice
 from .backend import OpenRGB
 from .effects import EFFECTS,NEW_EFFECTS,DENSITY_EFFECTS,render,points,color
 from .scenes import SceneStore,validate
 from .sources import Metrics,Audio,Events,process_names
 from .catalog import import_catalog
+from .monitoring import SystemWidgets
 
 class DeskCanvas(QWidget):
     def __init__(self,studio,editable=False):
@@ -87,6 +88,7 @@ class DeskCanvas(QWidget):
 class Window(BaseWindow):
     def __init__(self,demo=False,preset_path=None,scene_path=None,auto_hardware=False,hardware=None):
         self.hardware=hardware or Hardware()
+        self.recovering=False;self.recover_selection=[];self.recovery_times=[]
         self.layouts={};self.paint={};self.preview_frames={};self.streaming=False
         self.started=time.monotonic();self.sent_frames=0;self.last_send=0;self.last_sample=0
         self.inputs={};self.metrics=Metrics();self.audio=Audio();self.events=Events()
@@ -244,7 +246,8 @@ class Window(BaseWindow):
         box.addWidget(self.catalog_table);self.catalog_note=label('No reference catalog imported.','sub');box.addWidget(self.catalog_note)
         self.tabs.addTab(w,'Plugin references')
     def build_status_tab(self):
-        w=QWidget();box=QVBoxLayout(w);box.addWidget(label('System & feature coverage','title'))
+        w=QWidget();box=QVBoxLayout(w);box.addWidget(label('System monitoring','title'))
+        self.system_widgets=SystemWidgets();box.addWidget(self.system_widgets)
         self.system_note=label('Collecting read-only CPU, memory and available OS sensors…');box.addWidget(self.system_note)
         rows=[('Device control','Bundled hardware engine, automatic discovery, per-LED control'),('Lighting',f'{len(EFFECTS)} spatial, reactive and input-driven effects'),
               ('Layouts','Drag, rotate, grid/strip mapping and LED paint'),('Scenes & automation','Local scene library, import/export, time and running-app rules'),
@@ -286,8 +289,10 @@ class Window(BaseWindow):
         if not self.backend.demo:
             self.status.setText(f'●  Hardware ready · {len(devices)} device(s)')
             self.mode_note.setText('Bundled OpenRGB engine · managed by Prism Light')
-            self.report('Hardware ready. Select an effect and press Play.' if devices else
+            message=('Hardware ready. Select an effect and press Play.' if devices else
                 'No devices detected. Check USB access permissions and supported hardware in Devices.')
+            if self.hardware.conflicts:message+=conflict_advice(self.hardware.conflicts)
+            self.report(message,bool(self.hardware.conflicts))
     def connect_live(self):
         if self.future:return
         self.disconnect();self.backend=OpenRGB()
@@ -295,7 +300,35 @@ class Window(BaseWindow):
         self.mode_note.setText('Starting the built-in hardware engine…')
         self.job(lambda:self.hardware.connect(self.backend),self.did_connect)
     def connection_error(self,error):
-        self.report(f'{error} Open Devices to retry discovery or view hardware diagnostics.',True)
+        text=str(error)
+        if self.hardware.conflicts and 'also running' not in text:text+=conflict_advice(self.hardware.conflicts)
+        self.report(f'{text} Open Devices to retry discovery or view hardware diagnostics.',True)
+    def job_failed(self,error):
+        now=time.monotonic()
+        self.recovery_times=[t for t in getattr(self,'recovery_times',[]) if now-t<60]
+        engine_alive=self.hardware.process is not None and self.hardware.process.poll() is None
+        if (self.streaming or self.recovering) and not self.backend.demo and engine_alive and len(self.recovery_times)<3:
+            # Transient SDK hiccup: rejoin the running engine and resume,
+            # instead of dropping the session and forcing a full rescan.
+            self.recovery_times.append(now)
+            selection=self.recover_selection if self.recovering else self.selected()
+            self.recovering=True;self.recover_selection=selection
+            self.backend.close();self.connected=False
+            self.status.setText('◌  Reconnecting to hardware…')
+            self.stream_status.setText('Reconnecting · effects resume automatically')
+            port=self.hardware.port
+            self.job(lambda:self.backend.connect(port),lambda devices:self.did_recover(devices,selection))
+            return
+        self.recovering=False;self.streaming=False
+        super().job_failed(error)
+    def did_recover(self,devices,selection):
+        self.recovering=False
+        self.did_connect(devices)
+        for key,check in self.checks.items():check.setChecked(key in selection and bool(check.property('supported')))
+        if not self.selected():
+            self.report('Reconnected, but the selected devices are gone. Effects stopped.',True);return
+        self.streaming=True;self.refresh_controls()
+        self.report('Hardware connection recovered. Effects resumed.')
     def show_hardware_diagnostics(self):
         dialog=QDialog(self);dialog.setWindowTitle('Hardware diagnostics');dialog.resize(780,520)
         layout=QVBoxLayout(dialog)
@@ -355,6 +388,7 @@ class Window(BaseWindow):
         self.job(lambda:self.backend.apply_frame(frames),lambda n:self.report(f'Black frame sent to {n} device(s).'))
     def disconnect(self):
         self.streaming=False
+        self.recovering=False
         self.pending_blackout=False
         super().disconnect()
         self.hardware.close()
@@ -364,15 +398,18 @@ class Window(BaseWindow):
         super().tick()
         if not hasattr(self,'effect'):return
         now=time.monotonic();elapsed=now-self.started
-        if not self.connected and self.streaming:self.stop_effects()
+        if not self.connected and self.streaming and not self.recovering:self.stop_effects()
         if self.pending_blackout and self.connected and not self.future:self.blackout()
         if self.monitor_future and self.monitor_future.done():
             try:
                 metrics,self.names=self.monitor_future.result();self.inputs['cpu']=metrics['cpu']
+                self.system_widgets.update_metrics(metrics)
                 sensors=' · '.join(f'{n}: {v:.0f}°C' for n,v in metrics['temperatures'][:5])
                 fans=' · '.join(f'{n}: {v} RPM' for n,v in metrics['fans'][:5])
                 self.system_note.setText(f"CPU {metrics['cpu']:.0f}% · Memory {metrics['memory']:.0f}%\n{sensors or 'No OS temperature sensors available.'}\n{fans or 'No OS fan sensors available.'}")
-            except Exception as e:self.system_note.setText('System metrics unavailable: '+str(e))
+            except Exception as e:
+                self.system_widgets.update_metrics({'error':str(e)})
+                self.system_note.setText('System metrics unavailable: '+str(e))
             self.monitor_future=None
         if now-self.last_sample>2 and self.monitor_future is None:
             self.last_sample=now;auto=self.auto_enabled

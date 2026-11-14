@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-call Setup-Windows.cmd
+call Setup-Windows.cmd --no-driver
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m pip install -r requirements-build.txt
 if errorlevel 1 goto failed

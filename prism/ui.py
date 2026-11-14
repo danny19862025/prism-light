@@ -207,16 +207,18 @@ class Window(QMainWindow):
             try:
                 done(future.result())
             except Exception as e:
-                self.backend.close()
-                self.connected = False
-                self.status.setText('○  Disconnected / error')
-                self.connection_error(e)
+                self.job_failed(e)
             self.refresh_controls()
         self.health_tick += 1
         if self.health_tick >= 40:
             self.health_tick = 0
             if self.connected and not self.backend.demo and not self.future:
                 self.job(self.backend.health, lambda result:None)
+    def job_failed(self, error):
+        self.backend.close()
+        self.connected = False
+        self.status.setText('○  Disconnected / error')
+        self.connection_error(error)
     def disconnect(self):
         self.backend.close()
         self.connected = False
