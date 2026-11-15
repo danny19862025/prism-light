@@ -26,6 +26,8 @@ class SettingsWindow(QWidget):
     changed = Signal(str)          # settings key that changed
     helper_start = Signal()
     helper_stop = Signal()
+    helper_setup = Signal()
+    helper_remove = Signal()
 
     def __init__(self, settings, tracker, parent=None):
         super().__init__(parent)
@@ -135,6 +137,22 @@ class SettingsWindow(QWidget):
                 row.addWidget(check)
             row.addStretch()
             layout.addWidget(box)
+        cpu_row = QHBoxLayout()
+        cpu_row.addWidget(QLabel('CPU temperature sensor'))
+        self.cpu_sensor = QComboBox()
+        self.cpu_sensor.setToolTip(
+            'Tctl/Tdie is AMD\'s control temperature: the value Ryzen Master, HWiNFO and the BIOS show as CPU '
+            'temperature, and what the cooler responds to. CCD sensors are the individual core dies; an idle die '
+            'reads much cooler than Tctl.')
+        self.cpu_sensor.addItem('Automatic: Core (Tctl/Tdie)', '')
+        current = self.settings['cpu_temp_sensor']
+        if current:
+            self.cpu_sensor.addItem(current, current)
+            self.cpu_sensor.setCurrentIndex(1)
+        self.cpu_sensor.currentIndexChanged.connect(
+            lambda: self.set('cpu_temp_sensor', self.cpu_sensor.currentData() or ''))
+        cpu_row.addWidget(self.cpu_sensor, 1)
+        layout.addLayout(cpu_row)
         layout.addWidget(QLabel('Motherboard fans to show (needs the sensor helper):'))
         self.fan_list = QListWidget()
         self.fan_list.setMaximumHeight(110)
@@ -256,6 +274,20 @@ class SettingsWindow(QWidget):
         row.addWidget(stop)
         row.addStretch()
         layout.addLayout(row)
+        auto = QHBoxLayout()
+        self.setup_button = QPushButton('Set up automatic sensor helper…')
+        self.setup_button.setToolTip('One administrator prompt: copies the helper into Program Files and registers an '
+                                     'on-demand Task Scheduler task, so it starts without a prompt from then on.')
+        self.setup_button.clicked.connect(self.helper_setup.emit)
+        self.remove_button = QPushButton('Remove automatic helper…')
+        self.remove_button.clicked.connect(self.helper_remove.emit)
+        auto.addWidget(self.setup_button)
+        auto.addWidget(self.remove_button)
+        auto.addStretch()
+        layout.addLayout(auto)
+        self.auto_label = QLabel()
+        self.auto_label.setWordWrap(True)
+        layout.addWidget(self.auto_label)
         info = QLabel(
             'The widget runs as a standard user. GPU (AMD driver), CPU load and clock estimate, RAM, network '
             'and disk need no special rights. CPU temperature, CPU package power, measured core clocks and '
@@ -281,6 +313,15 @@ class SettingsWindow(QWidget):
         lines = [f'<b>{names[k]}:</b> {status.get(k, "starting…")}' for k in names]
         state, detail = helper_state
         lines.append(f'<b>Sensor helper:</b> {state} — {detail}')
+        from .host import installed_root, task_status
+        auto_status = task_status()
+        self.auto_label.setText('Automatic helper: ' + {
+            'ready': f'set up ({installed_root()}); starts without a prompt.',
+            'outdated': 'set up, but from a different version; run the repair/update button.',
+            'missing': 'not set up; the helper needs an administrator prompt each time.'}[auto_status])
+        self.setup_button.setText('Set up automatic sensor helper…' if auto_status == 'missing'
+                                  else 'Repair / update automatic helper…')
+        self.remove_button.setEnabled(auto_status != 'missing')
         if snapshot and snapshot.info.get('cpu_temp_sensor'):
             lines.append(f"<b>CPU temperature sensor:</b> {snapshot.info['cpu_temp_sensor']}")
         self.status_label.setText('<br>'.join(lines))
@@ -288,8 +329,31 @@ class SettingsWindow(QWidget):
         live = self.tracker.presenting()
         self.presenting.setText('Presenting now: ' + (', '.join(f'{n} ({f:.0f} fps)' for _, n, f in live[:6])
                                                       if live else 'nothing yet'))
+        if snapshot and snapshot.info.get('cpu_temps'):
+            self.fill_cpu_sensors(snapshot.info['cpu_temps'])
         if snapshot and snapshot.fans:
             self.fill_fans(snapshot)
+
+    def fill_cpu_sensors(self, temps):
+        combo = self.cpu_sensor
+        names = [combo.itemData(i) for i in range(1, combo.count())]
+        combo.blockSignals(True)
+        if names != list(temps):
+            current = self.settings['cpu_temp_sensor']
+            while combo.count() > 1:
+                combo.removeItem(1)
+            for name in temps:
+                combo.addItem(name, name)
+            if current and current not in temps:
+                combo.addItem(f'{current} (not reported)', current)
+            combo.setCurrentIndex(max(0, combo.findData(current)) if current else 0)
+        for i in range(1, combo.count()):
+            name = combo.itemData(i)
+            if name in temps:
+                combo.setItemText(i, f'{name} — {temps[name]:.0f} °C')
+        tctl = temps.get('Core (Tctl/Tdie)')
+        combo.setItemText(0, 'Automatic: Core (Tctl/Tdie)' + (f' — {tctl:.0f} °C' if tctl is not None else ''))
+        combo.blockSignals(False)
 
     def fill_fans(self, snapshot):
         chosen = self.settings['fans_visible']

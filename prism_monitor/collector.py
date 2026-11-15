@@ -10,7 +10,7 @@ import traceback
 
 from PySide6.QtCore import QObject, Signal
 
-from .model import Snapshot
+from .model import Reading, Snapshot
 from .sources import AdlGpuSource, SystemSource
 
 
@@ -23,6 +23,7 @@ class Collector(QObject):
         self.tracker = tracker
         self.interval = interval
         self.fps_target = ''
+        self.cpu_temp_sensor = ''   # '' = automatic (Tctl/Tdie)
         self.fps_note = 'FPS capture is off.'
         self.stop_flag = threading.Event()
         self.wake = threading.Event()
@@ -84,6 +85,12 @@ class Collector(QObject):
                 snap.fans = fans
                 for key, value in host_info.items():
                     snap.info.setdefault(key, value)
+                chosen = self.cpu_temp_sensor
+                temps = host_info.get('cpu_temps') or {}
+                if chosen and chosen in temps and 'cpu_temp' in host_readings:
+                    base = host_readings['cpu_temp']
+                    snap.readings['cpu_temp'] = Reading(temps[chosen], base.ts, 'lhm')
+                    snap.info['cpu_temp_sensor'] = chosen
                 fps, app = self.tracker.read(self.fps_target)
                 snap.readings.update({k: v for k, v in fps.items() if v is not None})
                 snap.info['fps_app'] = app

@@ -47,6 +47,7 @@ class PrismMonitor:
         self.host.interval_ms = round(settings['interval'] * 1000)
         self.collector = Collector(self.host, self.tracker, settings['interval'])
         self.collector.fps_target = settings['fps_process']
+        self.collector.cpu_temp_sensor = settings['cpu_temp_sensor']
         self.presentmon = LocalPresentMon(vendor_dir() / 'presentmon' / 'PresentMon.exe', self.tracker)
         self.fps_mode = 'local'
         self.fps_retry_at = 0.0
@@ -62,8 +63,11 @@ class PrismMonitor:
         self.widget.context_requested.connect(lambda pos: self.menu.popup(pos))
         self.widget.moved.connect(self.remember_position)
         self.settings_window.changed.connect(self.setting_changed)
-        self.settings_window.helper_start.connect(self.host.start)
+        self.settings_window.helper_start.connect(self.start_helper)
         self.settings_window.helper_stop.connect(self.host.stop)
+        self.settings_window.helper_setup.connect(self.host.setup_task)
+        self.settings_window.helper_remove.connect(self.host.remove_task)
+        self.host.setup_finished.connect(self.on_setup_finished)
         self.collector.snapshot.connect(self.on_snapshot)
         self.host.state_changed.connect(self.on_helper_state)
 
@@ -82,8 +86,13 @@ class PrismMonitor:
         self.collector.start()
         self.supervise_fps()
         self.fps_timer.start()
-        if settings['helper_autostart']:
-            QTimer.singleShot(1500, self.host.start)
+        self.hint_pending = False
+        if settings['helper_task']:
+            QTimer.singleShot(800, self.start_helper)       # installed task: no prompt
+        elif settings['helper_autostart']:
+            QTimer.singleShot(1500, self.start_helper)
+        elif not settings['setup_hint_shown']:
+            QTimer.singleShot(4000, self.show_setup_hint)
         if settings.error:
             self.tray.showMessage(APP_NAME, settings.error, QSystemTrayIcon.Warning, 6000)
         autostart.sync(settings['launch_at_login'])
@@ -101,12 +110,14 @@ class PrismMonitor:
         self.act_top = self.check_action('Always on top', 'always_on_top')
         menu.addSeparator()
         self.act_helper = menu.addAction('Start sensor helper (administrator)…', self.toggle_helper)
+        self.act_setup = menu.addAction('Set up automatic CPU sensors (one-time)…', self.host.setup_task)
         menu.addAction('Reset widget position', self.reset_position)
         menu.addSeparator()
         menu.addAction('Quit Prism Monitor', self.app.quit)
         menu.aboutToShow.connect(self.sync_menu)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self.tray_activated)
+        self.tray.messageClicked.connect(self.tray_message_clicked)
         self.tray.show()
 
     def check_action(self, text, key):
@@ -123,7 +134,11 @@ class PrismMonitor:
             action.setChecked(self.settings[key])
             action.blockSignals(False)
         connected = self.host.state in ('connected', 'starting')
-        self.act_helper.setText('Stop sensor helper' if connected else 'Start sensor helper (administrator)…')
+        automatic = self.settings['helper_task']
+        self.act_helper.setText('Stop sensor helper' if connected else
+                                'Start sensor helper' if automatic else 'Start sensor helper (administrator)…')
+        self.act_setup.setVisible(not automatic)
+        self.act_setup.setEnabled(self.host.state != 'setup')
 
     def tray_activated(self, reason):
         if reason == QSystemTrayIcon.Trigger:
@@ -144,7 +159,47 @@ class PrismMonitor:
         if self.host.state in ('connected', 'starting'):
             self.host.stop()
         else:
-            self.host.start()
+            self.start_helper()
+
+    def start_helper(self):
+        self.host.start(use_task=self.settings['helper_task'])
+
+    def setup_or_start(self):
+        """--setup-helper: set up the automatic helper unless it is already current."""
+        from .host import task_status
+        if task_status() == 'ready':
+            if not self.settings['helper_task']:
+                self.settings['helper_task'] = True
+                self.save()
+            self.start_helper()
+        else:
+            self.host.setup_task()
+
+    def show_setup_hint(self):
+        if self.settings['helper_task'] or self.host.state in ('connected', 'starting', 'setup'):
+            return
+        self.hint_pending = True
+        self.settings['setup_hint_shown'] = True
+        self.save_timer.start()
+        self.tray.showMessage('CPU temperature needs a one-time setup',
+                              'Click here to set up the sensor helper. Windows asks for administrator approval once; '
+                              'after that CPU temperature, power and fans show automatically.',
+                              QSystemTrayIcon.Information, 15000)
+
+    def tray_message_clicked(self):
+        if self.hint_pending:
+            self.hint_pending = False
+            self.host.setup_task()
+
+    def on_setup_finished(self, installed, message):
+        self.settings['helper_task'] = installed
+        self.save()
+        self.settings_window.update_status(self.last_snapshot, (self.host.state, message))
+        self.settings_window.refresh_live()
+        ok = installed or 'removed' in message
+        self.tray.showMessage(APP_NAME, message, QSystemTrayIcon.Information if ok else QSystemTrayIcon.Warning, 6000)
+        if installed:
+            self.start_helper()
 
     def show_settings(self):
         w = self.settings_window
@@ -175,6 +230,9 @@ class PrismMonitor:
             ok, message = autostart.sync(s['launch_at_login'])
             if not ok:
                 QMessageBox.warning(self.settings_window, APP_NAME, message)
+        elif key == 'cpu_temp_sensor':
+            self.collector.cpu_temp_sensor = s['cpu_temp_sensor']
+            self.widget.reset_history()
         elif key == 'fps_process':
             self.collector.fps_target = s['fps_process']
         elif key == 'accent':
@@ -302,12 +360,12 @@ class PrismMonitor:
         self.tray.hide()
 
 
-def single_instance(name):
-    """True if this is the first instance; otherwise asks the first to show settings."""
+def single_instance(name, message=b'show'):
+    """A server if this is the first instance; otherwise forwards `message` to the first and returns None."""
     socket = QLocalSocket()
     socket.connectToServer(name)
     if socket.waitForConnected(300):
-        socket.write(b'show\n')
+        socket.write(message + b'\n')
         socket.waitForBytesWritten(300)
         return None
     QLocalServer.removeServer(name)
@@ -324,13 +382,15 @@ def main(argv=None):
     parser.add_argument('--smoke-test', action='store_true', help='start, collect a few snapshots, then exit')
     parser.add_argument('--grab', help='with --smoke-test: save a PNG of the widget (and settings window) here')
     parser.add_argument('--start-helper', action='store_true', help='start the sensor helper immediately')
+    parser.add_argument('--setup-helper', action='store_true',
+                        help='run the one-time automatic sensor helper setup (one administrator prompt)')
     args, _ = parser.parse_known_args(argv)
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv[:1])
     app.setApplicationName('PrismMonitor')
     app.setApplicationDisplayName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
-    server = single_instance(f'PrismMonitor-{getpass.getuser()}')
+    server = single_instance(f'PrismMonitor-{getpass.getuser()}', b'setup' if args.setup_helper else b'show')
     if server is None:
         return 0
     settings = Settings(args.config)
@@ -340,10 +400,19 @@ def main(argv=None):
     def incoming():
         conn = server.nextPendingConnection()
         if conn is not None:
-            conn.readyRead.connect(lambda: (conn.readAll(), monitor.widget.show(), monitor.show_settings()))
+            conn.readyRead.connect(lambda: handle(bytes(conn.readAll())))
+
+    def handle(data):
+        if b'setup' in data:
+            monitor.setup_or_start()
+        else:
+            monitor.widget.show()
+            monitor.show_settings()
     server.newConnection.connect(incoming)
     if args.start_helper:
-        QTimer.singleShot(200, monitor.host.start)
+        QTimer.singleShot(200, monitor.start_helper)
+    if args.setup_helper:
+        QTimer.singleShot(500, monitor.setup_or_start)
     if args.smoke_test:
         def report():
             if args.grab:

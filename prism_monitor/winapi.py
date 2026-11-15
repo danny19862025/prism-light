@@ -392,3 +392,33 @@ def tie_to_this_process(pid):
         return bool(kernel32.AssignProcessToJobObject(_job, handle))
     finally:
         kernel32.CloseHandle(handle)
+
+
+def wait_exit_code(handle, timeout_ms):
+    """Wait for a process handle; returns its exit code, or None on timeout."""
+    if kernel32.WaitForSingleObject(handle, int(timeout_ms)) != 0:
+        return None
+    code = wintypes.DWORD()
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+        return None
+    return code.value
+
+
+def pipe_server_image(pipe_handle):
+    """Full executable path of the process serving a connected named pipe, or None."""
+    pid = wintypes.ULONG()
+    kernel32.GetNamedPipeServerProcessId.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.ULONG)]
+    if not kernel32.GetNamedPipeServerProcessId(wintypes.HANDLE(pipe_handle), ctypes.byref(pid)):
+        return None
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not handle:
+        return None
+    try:
+        buffer = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(len(buffer))
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return None
+        return buffer.value
+    finally:
+        kernel32.CloseHandle(handle)

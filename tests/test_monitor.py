@@ -114,6 +114,7 @@ class HostMappingTests(unittest.TestCase):
             self.item('SuperIO', 'Fan', 'Fan #4', None, hw='ITE IT8696E', id_='/lpc/it8696e/0/fan/3')])
         self.assertEqual(readings['cpu_temp'].value, 69.75)
         self.assertEqual(info['cpu_temp_sensor'], 'Core (Tctl/Tdie)')
+        self.assertEqual(info['cpu_temps'], {'CCD1 (Tdie)': 60, 'Core (Tctl/Tdie)': 69.75})   # all, for selection
         self.assertEqual(readings['cpu_power'].value, 87.6)
         self.assertEqual(readings['cpu_clock'].value, 5067)
         self.assertEqual(set(fans), {'/lpc/it8696e/0/fan/0', '/lpc/it8696e/0/fan/2'})   # None skipped, 0 rpm kept
@@ -190,6 +191,18 @@ class WidgetTests(unittest.TestCase):
             settings['orientation'] = 'vertical'
             w.relayout()
             self.assertGreater(w.height(), w.width())
+
+    def test_settings_window_refreshes_status(self):
+        from prism_monitor.fps import FrameTracker
+        from prism_monitor.settings_window import SettingsWindow
+        with tempfile.TemporaryDirectory() as d:
+            window = SettingsWindow(Settings(Path(d) / 's.json'), FrameTracker(own_pid=999))
+            window.update_status(Snapshot(status={'system': 'OK', 'fps': 'OK'}), ('off', 'Not started.'))
+            window.show()            # showEvent → refresh_live
+            window.refresh_live()
+            self.assertIn('Status: OK', window.fps_status.text())
+            self.assertTrue(window.auto_label.text().startswith('Automatic helper:'))
+            window.close()
 
 
 if __name__ == '__main__':

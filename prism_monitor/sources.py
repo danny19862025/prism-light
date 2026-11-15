@@ -210,4 +210,6 @@ def map_host_items(items, now=None):
             readings['cpu_temp'] = reading(cpu_temps[preferred], 'lhm', now=now)
             info['cpu_temp_sensor'] = preferred
             break
+    if cpu_temps:
+        info['cpu_temps'] = dict(cpu_temps)   # all CPU temperature sensors, for selection and tooltips
     return {k: v for k, v in readings.items() if v is not None}, fans, info

@@ -24,7 +24,10 @@ DEFAULTS = {
     'click_through': False,
     'launch_at_login': False,
     'helper_autostart': False,       # start the elevated sensor helper on launch (shows UAC)
+    'helper_task': False,            # one-time setup done: start the protected helper task, no prompt
+    'setup_hint_shown': False,
     'fps_process': '',               # '' = foreground application, else exe name
+    'cpu_temp_sensor': '',           # '' = automatic (Tctl/Tdie), else a LibreHardwareMonitor sensor name
     'position': None,                # [x, y] in virtual-desktop coordinates
     'shown': True,
 }
@@ -67,7 +70,9 @@ def validate(data):
     pos = out['position']
     out['position'] = [int(pos[0]), int(pos[1])] if isinstance(pos, (list, tuple)) and len(pos) == 2 else None
     out['fps_process'] = str(out['fps_process'] or '')[:260]
-    for key in ('graphs', 'always_on_top', 'locked', 'click_through', 'launch_at_login', 'helper_autostart', 'shown'):
+    out['cpu_temp_sensor'] = str(out['cpu_temp_sensor'] or '')[:64]
+    for key in ('graphs', 'always_on_top', 'locked', 'click_through', 'launch_at_login', 'helper_autostart', 'helper_task',
+                'setup_hint_shown', 'shown'):
         out[key] = bool(out[key])
     return out
 

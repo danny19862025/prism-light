@@ -45,6 +45,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "cpusensors"; Description: "Set up CPU temperature, CPU power and fan sensors when Prism Monitor starts (Windows asks for administrator approval once; installs a read-only helper in Program Files and an on-demand scheduled task)"; GroupDescription: "Sensors:"
 
 [Files]
 Source: "..\dist\PrismMonitor\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -59,7 +60,16 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "PrismMonitor"; Flags: uninsdeletevalue dontcreatekey
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Parameters: "--setup-helper"; Description: "{cm:LaunchProgram,{#AppName}}"; Tasks: cpusensors; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Tasks: not cpusensors; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM {#AppExe} /F"; Flags: runhidden; RunOnceId: "StopPrismMonitor"
+; Remove the automatic sensor helper (Program Files copy and scheduled task); needs administrator approval.
+Filename: "{app}\vendor\sensorhost\PrismSensorHost.exe"; Parameters: "--uninstall"; Verb: "runas"; Flags: shellexec waituntilterminated runhidden; Check: HelperInstalled; RunOnceId: "RemoveSensorHelper"
+
+[Code]
+function HelperInstalled: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{commonpf64}\Prism Monitor Sensor Helper\sensorhost\PrismSensorHost.exe'));
+end;

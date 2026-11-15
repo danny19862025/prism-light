@@ -6,8 +6,18 @@
 // It never writes to hardware, never installs drivers and exits when the
 // widget exits or disconnects.
 //
-// Usage: PrismSensorHost.exe --pipe <name> --sid <user SID> --parent <pid>
+// Usage: PrismSensorHost.exe --pipe <name> --sid <user SID> [--parent <pid>]
 //        PrismSensorHost.exe --dump      (print one JSON snapshot and exit)
+//        PrismSensorHost.exe --install --sid <user SID>   (elevated, one time)
+//        PrismSensorHost.exe --uninstall                  (elevated)
+//
+// --install copies this helper, LibreHardwareMonitorLib and PresentMon into
+// %ProgramFiles%\Prism Monitor Sensor Helper (writable only by
+// administrators) and registers an on-demand Task Scheduler task that runs
+// that protected copy with highest privileges for the given user. The widget
+// then starts the task without a consent prompt. The task has no triggers:
+// it runs only when the widget asks, and the helper exits when the widget
+// disconnects.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -32,13 +42,31 @@ internal static class PrismSensorHost
     {
         string pipe = null, sid = null;
         int parent = 0;
-        bool dump = false;
+        bool dump = false, install = false, uninstall = false;
         for (int i = 0; i < args.Length; i++)
         {
+            if (args[i] == "--install") install = true;
+            else if (args[i] == "--uninstall") uninstall = true;
+            else
             if (args[i] == "--pipe" && i + 1 < args.Length) pipe = args[++i];
             else if (args[i] == "--sid" && i + 1 < args.Length) sid = args[++i];
             else if (args[i] == "--parent" && i + 1 < args.Length) int.TryParse(args[++i], out parent);
             else if (args[i] == "--dump") dump = true;
+        }
+        if (install || uninstall)
+        {
+            try
+            {
+                if (uninstall) return Uninstall();
+                if (string.IsNullOrEmpty(sid)) return 64;
+                new SecurityIdentifier(sid);   // validates the SID format
+                return Install(sid);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine(e.Message);
+                return 5;
+            }
         }
         Computer computer = new Computer();
         computer.IsCpuEnabled = true;
@@ -115,6 +143,112 @@ internal static class PrismSensorHost
             }
         }
         StopPresentMon();
+        return 0;
+    }
+
+    internal const string TaskName = "Prism Monitor Sensor Helper";
+
+    private static string InstallRoot()
+    {
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Prism Monitor Sensor Helper");
+    }
+
+    private static int RunTool(string exe, string arguments)
+    {
+        ProcessStartInfo info = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, exe), arguments);
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+        info.RedirectStandardOutput = true;
+        info.RedirectStandardError = true;
+        using (Process p = Process.Start(info))
+        {
+            string output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+            p.WaitForExit(30000);
+            if (p.ExitCode != 0) Console.Error.WriteLine(output.Trim());
+            return p.ExitCode;
+        }
+    }
+
+    private static void StopInstalledHelpers(string root)
+    {
+        RunTool("schtasks.exe", "/End /TN \"" + TaskName + "\"");
+        foreach (Process p in Process.GetProcessesByName("PrismSensorHost"))
+        {
+            try
+            {
+                if (p.Id != Process.GetCurrentProcess().Id &&
+                    p.MainModule.FileName.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                {
+                    p.Kill();
+                    p.WaitForExit(5000);
+                }
+            }
+            catch (Exception) { }
+        }
+    }
+
+    private static string Xml(string s)
+    {
+        return System.Security.SecurityElement.Escape(s);
+    }
+
+    private static int Install(string sid)
+    {
+        string source = Path.GetDirectoryName(typeof(PrismSensorHost).Assembly.Location);
+        string root = InstallRoot();
+        string hostDir = Path.Combine(root, "sensorhost");
+        if (source.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Run --install from the Prism Monitor folder, not the installed copy.");
+        string presentMon = Path.GetFullPath(Path.Combine(source, Path.Combine("..", Path.Combine("presentmon", "PresentMon.exe"))));
+        StopInstalledHelpers(root);
+        Directory.CreateDirectory(hostDir);
+        foreach (string file in Directory.GetFiles(source))
+        {
+            string ext = Path.GetExtension(file).ToLowerInvariant();
+            if (ext == ".dll" || ext == ".exe" || ext == ".config" || ext == ".txt")
+                File.Copy(file, Path.Combine(hostDir, Path.GetFileName(file)), true);
+        }
+        if (File.Exists(presentMon))
+        {
+            Directory.CreateDirectory(Path.Combine(root, "presentmon"));
+            File.Copy(presentMon, Path.Combine(root, Path.Combine("presentmon", "PresentMon.exe")), true);
+        }
+        string exe = Path.Combine(hostDir, "PrismSensorHost.exe");
+        string pipe = "PrismMonitorHelper-" + sid;
+        string xml =
+            "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n" +
+            "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\r\n" +
+            "  <RegistrationInfo><Description>Reads CPU and motherboard sensors for Prism Monitor (read-only). " +
+            "Started on demand by the widget; exits when the widget closes.</Description></RegistrationInfo>\r\n" +
+            "  <Principals><Principal id=\"Author\"><UserId>" + Xml(sid) + "</UserId><LogonType>InteractiveToken</LogonType>" +
+            "<RunLevel>HighestAvailable</RunLevel></Principal></Principals>\r\n" +
+            "  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" +
+            "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>" +
+            "<AllowHardTerminate>true</AllowHardTerminate><StartWhenAvailable>false</StartWhenAvailable>" +
+            "<AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>false</Hidden>" +
+            "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>7</Priority></Settings>\r\n" +
+            "  <Actions Context=\"Author\"><Exec><Command>" + Xml(exe) + "</Command>" +
+            "<Arguments>--pipe " + Xml(pipe) + " --sid " + Xml(sid) + "</Arguments>" +
+            "<WorkingDirectory>" + Xml(hostDir) + "</WorkingDirectory></Exec></Actions>\r\n" +
+            "</Task>\r\n";
+        string temp = Path.Combine(Path.GetTempPath(), "PrismMonitorHelperTask-" + Guid.NewGuid().ToString("N") + ".xml");
+        File.WriteAllText(temp, xml, Encoding.Unicode);
+        try
+        {
+            return RunTool("schtasks.exe", "/Create /TN \"" + TaskName + "\" /XML \"" + temp + "\" /F") == 0 ? 0 : 6;
+        }
+        finally
+        {
+            File.Delete(temp);
+        }
+    }
+
+    private static int Uninstall()
+    {
+        string root = InstallRoot();
+        StopInstalledHelpers(root);
+        RunTool("schtasks.exe", "/Delete /TN \"" + TaskName + "\" /F");
+        if (Directory.Exists(root)) Directory.Delete(root, true);
         return 0;
     }
 

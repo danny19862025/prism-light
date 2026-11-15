@@ -8,8 +8,11 @@ a separate helper process that the user starts through the Windows
 administrator prompt. The helper streams JSON over a per-session named pipe
 that only this user can open, and exits as soon as the widget does.
 """
+import hashlib
 import json
+import os
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -36,9 +39,43 @@ def helper_path():
     return vendor_dir() / 'sensorhost' / 'PrismSensorHost.exe'
 
 
+# One-time "automatic" setup: an admin-protected copy plus an on-demand task.
+TASK_NAME = 'Prism Monitor Sensor Helper'
+
+
+def installed_root():
+    return Path(os.environ.get('ProgramFiles', r'C:\Program Files')) / 'Prism Monitor Sensor Helper'
+
+
+def installed_helper():
+    return installed_root() / 'sensorhost' / 'PrismSensorHost.exe'
+
+
+def _sha256(path):
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def task_status():
+    """'missing', 'outdated' or 'ready' for the automatic helper."""
+    if not installed_helper().is_file():
+        return 'missing'
+    if _sha256(installed_helper()) != _sha256(helper_path()):
+        return 'outdated'
+    return 'ready'
+
+
+def _no_window():
+    return getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+
 class HostClient(QObject):
     state_changed = Signal(str)
+    setup_finished = Signal(bool, str)     # (task now installed, message)
     _launched = Signal(object, str)   # (process handle or None, error)
+    _setup_done = Signal(str, object, str)   # (action, exit code, error)
 
     def __init__(self, tracker=None, parent=None):
         super().__init__(parent)
@@ -59,14 +96,17 @@ class HostClient(QObject):
         self.retry = QTimer(self, interval=250, timeout=self._try_connect)
         self.watch = QTimer(self, interval=2000, timeout=self._watch)
         self._launched.connect(self._on_launched)
+        self._setup_done.connect(self._on_setup_done)
+        self.expected_server = None
 
     # -- lifecycle --------------------------------------------------------
     def set_state(self, state, detail):
         self.state, self.detail = state, detail
         self.state_changed.emit(state)
 
-    def start(self):
-        if self.state in ('starting', 'connected'):
+    def start(self, use_task=False):
+        """Start the helper: through the installed task (no prompt) or the UAC prompt."""
+        if self.state in ('starting', 'connected', 'setup'):
             return
         exe = helper_path()
         if not winapi.WINDOWS:
@@ -79,12 +119,16 @@ class HostClient(QObject):
             note = ' PawnIO is not installed, so CPU temperature, CPU power and motherboard fans will stay unavailable.'
         else:
             note = ''
-        self.pipe = 'PrismMonitor-' + secrets.token_hex(12)
         try:
             sid = winapi.current_user_sid()
         except OSError as e:
             self.set_state('failed', f'Could not read the current user SID: {e}')
             return
+        if use_task:
+            self.start_task(sid, note)
+            return
+        self.expected_server = exe.resolve()
+        self.pipe = 'PrismMonitor-' + secrets.token_hex(12)
         params = f'--pipe {self.pipe} --sid {sid} --parent {__import__("os").getpid()}'
         self.set_state('starting', 'Waiting for the Windows administrator prompt…' + note)
 
@@ -97,6 +141,79 @@ class HostClient(QObject):
             except OSError as e:
                 self._launched.emit(None, f'Could not start the sensor helper: {e}')
         threading.Thread(target=launch, name='helper-launch', daemon=True).start()
+
+    def start_task(self, sid, note=''):
+        status = task_status()
+        if status != 'ready':
+            self.set_state('failed', 'The automatic sensor helper is not set up.' if status == 'missing' else
+                           'The automatic sensor helper is from a different Prism Monitor version. '
+                           'Run Settings → Sensors → Set up automatic sensor helper again.')
+            return
+        self.expected_server = installed_helper().resolve()
+        self.pipe = 'PrismMonitorHelper-' + sid
+        schtasks = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'schtasks.exe'
+        try:
+            result = subprocess.run([str(schtasks), '/Run', '/TN', TASK_NAME], capture_output=True, text=True,
+                                    stdin=subprocess.DEVNULL,  # windowed builds have no stdin handle
+                                    timeout=20, creationflags=_no_window())
+        except (OSError, subprocess.TimeoutExpired) as e:
+            self.set_state('failed', f'Could not start the sensor helper task: {e}')
+            return
+        if result.returncode != 0:
+            message = (result.stderr or result.stdout).strip()
+            self.set_state('failed', f'The sensor helper task did not start: {message}')
+            return
+        self.set_state('starting', 'Starting the automatic sensor helper…' + note)
+        self.handle = None
+        self.connect_deadline = time.monotonic() + 30
+        self.retry.start()
+
+    def setup_task(self):
+        """One administrator prompt: copy the helper to Program Files and register the task."""
+        self._elevated_action('install')
+
+    def remove_task(self):
+        self._elevated_action('uninstall')
+
+    def _elevated_action(self, action):
+        exe = helper_path()
+        if not exe.is_file():
+            self.setup_finished.emit(task_status() != 'missing', f'Sensor helper missing: {exe}')
+            return
+        try:
+            params = '--uninstall' if action == 'uninstall' else f'--install --sid {winapi.current_user_sid()}'
+        except OSError as e:
+            self.setup_finished.emit(False, f'Could not read the current user SID: {e}')
+            return
+        if action == 'uninstall' or self.state in ('connected', 'starting'):
+            self.stop()   # the installed copy is replaced or removed
+        self.set_state('setup', 'Waiting for the Windows administrator prompt (one-time setup)…')
+
+        def run():
+            try:
+                handle = winapi.run_elevated(exe, params, exe.parent)
+            except OSError as e:
+                self._setup_done.emit(action, None, str(e))
+                return
+            try:
+                code = winapi.wait_exit_code(handle, 180000)
+            finally:
+                winapi.close_handle(handle)
+            self._setup_done.emit(action, code, '' if code == 0 else f'Setup exited with code {code}.')
+        threading.Thread(target=run, name=f'helper-{action}', daemon=True).start()
+
+    def _on_setup_done(self, action, code, error):
+        installed = task_status() == 'ready'
+        if action == 'install':
+            ok = code == 0 and installed
+            message = ('Automatic sensor helper set up. CPU temperature, power, clocks and fans now start '
+                       'without a prompt.') if ok else f'Setup did not complete. {error}'
+        else:
+            ok = code == 0 and task_status() == 'missing'
+            installed = not ok and installed
+            message = 'Automatic sensor helper removed.' if ok else f'Removal did not complete. {error}'
+        self.set_state('off', message)
+        self.setup_finished.emit(installed, message)
 
     def _on_launched(self, handle, error):
         if error:
@@ -121,6 +238,13 @@ class HostClient(QObject):
             socket.deleteLater()
             return
         self.retry.stop()
+        # Only trust a pipe served by the expected helper binary (guards against pipe squatting).
+        server = winapi.pipe_server_image(int(socket.socketDescriptor()))
+        if self.expected_server and (not server or Path(server).resolve() != self.expected_server):
+            socket.abort()
+            socket.deleteLater()
+            self.set_state('failed', f'Refused a sensor pipe served by an unexpected program: {server or "unknown"}')
+            return
         self.socket = socket
         socket.readyRead.connect(self._read)
         socket.disconnected.connect(self._disconnected)

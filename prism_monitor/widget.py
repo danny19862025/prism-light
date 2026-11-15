@@ -22,13 +22,22 @@ THEMES = {
 }
 
 HINTS = {
-    'cpu_temp': 'CPU temperature needs the sensor helper (administrator) and the PawnIO driver. '
-                'Start it from the tray menu or Settings → Sensors.',
+    'cpu_temp': 'CPU temperature needs the sensor helper and the PawnIO driver. Right-click the widget or tray '
+                'icon → "Set up automatic CPU sensors" (one administrator prompt, then it starts automatically).',
     'cpu_power': 'CPU package power needs the sensor helper (administrator) and the PawnIO driver.',
     'fans': 'Motherboard fan speeds need the sensor helper (administrator) and the PawnIO driver.',
     'fps': 'No presenting game found. Focus the game, or pick its process in Settings → Game FPS.',
     'frametime': 'Frame time comes from the same PresentMon capture as FPS.',
 }
+
+
+SENSOR_SHORT = {'Core (Tctl/Tdie)': 'Tctl', 'CCDs Max (Tdie)': 'CCD max', 'CCDs Average (Tdie)': 'CCD avg',
+                'CCD1 (Tdie)': 'CCD1', 'CCD2 (Tdie)': 'CCD2', 'Core (Tdie)': 'Tdie', 'Core (Tctl)': 'Tctl',
+                'CPU Package': 'Package'}
+
+
+def short_sensor(name):
+    return SENSOR_SHORT.get(name, name.replace(' (Tdie)', ''))
 
 
 def short_device(name):
@@ -253,6 +262,12 @@ class MonitorWidget(QWidget):
             extra = ''
             if key == 'frametime' and item.extra:
                 extra = f'\nWorst frame in the last second: {item.extra:.1f} ms'
+            if key == 'cpu_temp' and snap and snap.info.get('cpu_temps'):
+                chosen = snap.info.get('cpu_temp_sensor')
+                extra += '\nAll CPU temperature sensors:' + ''.join(
+                    f"\n  {'▸ ' if name == chosen else '   '}{name}: {value:.1f} °C"
+                    for name, value in snap.info['cpu_temps'].items())
+                extra += '\nChoose the sensor in Settings → Metrics.'
             if key == 'cpu_clock' and item.source == 'pdh':
                 extra = '\nEstimated like Task Manager (base clock × processor performance). Start the sensor helper for measured core clocks.'
             if key in ('fps', 'frametime') and snap and snap.info.get('fps_app'):
@@ -345,6 +360,8 @@ class MonitorWidget(QWidget):
         metric = BY_KEY[key]
         text, fresh, item = self.value_text(key, now)
         label = metric.label
+        if key == 'cpu_temp' and self.snapshot and self.snapshot.info.get('cpu_temp_sensor'):
+            label = f"{label} · {short_sensor(self.snapshot.info['cpu_temp_sensor'])}"
         if key in ('ram_used', 'gpu_vram') and fresh and item.extra:
             label = f'{label} · {100 * item.value / item.extra:.0f}%'
         p.setFont(self.mkfont(px * 0.82))
