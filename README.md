@@ -6,6 +6,10 @@ An independent RGB desktop studio for **Windows and Linux**, extending the origi
 
 This is a working development build, **not full SignalRGB feature parity**. The coverage table below and **System & coverage** inside the app show the gaps. SignalRGB's recovered files informed the architecture and plugin-contract research. Its binaries, graphics, QML and device code are not bundled or executed. The optional importer indexes names and USB IDs from your locally supplied recovered ZIP; it does not make those plugins compatible drivers.
 
+## Prism Monitor (hardware stats widget)
+
+`PrismMonitor.exe` is a separate Windows 11 desktop widget for live CPU/GPU/RAM temperatures, load, clocks, power and per-game FPS. See [docs/MONITOR.md](docs/MONITOR.md). Run from source with `.venv\Scripts\python monitor_main.py` (or **Run-PrismMonitor.cmd**). Build `dist/PrismMonitor-windows.zip` with `.venv\Scripts\python build_monitor.py`.
+
 ## Run on Linux
 
 Extract `PrismLight-Studio-linux.zip` and run `./PrismLight/PrismLight`. Keep the whole folder together. Add `--demo` for simulated devices. The local portable bundle targets this build machine's Linux/glibc environment; other distributions have not been validated.

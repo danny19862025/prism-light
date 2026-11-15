@@ -1,0 +1,370 @@
+# SPDX-License-Identifier: GPL-3.0-only
+"""Prism Monitor application: widget, tray icon, settings and sensor plumbing."""
+import argparse
+import getpass
+import os
+import sys
+import time
+from pathlib import Path
+
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer
+from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon, QPainter, QPixmap
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+
+from . import autostart
+from .collector import Collector
+from .fps import FrameTracker, LocalPresentMon
+from .host import HostClient, vendor_dir
+from .settings import Settings
+from .settings_window import SettingsWindow
+from .widget import MonitorWidget
+
+APP_NAME = 'Prism Monitor'
+
+
+def make_icon(accent):
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(Qt.transparent)
+    p = QPainter(pixmap)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(20, 23, 32))
+    p.drawRoundedRect(QRectF(2, 2, 60, 60), 14, 14)
+    p.setBrush(QColor(accent))
+    for i, h in enumerate((18, 34, 26, 44)):
+        p.drawRoundedRect(QRectF(11 + i * 11, 52 - h, 8, h), 3, 3)
+    p.end()
+    return QIcon(pixmap)
+
+
+class PrismMonitor:
+    def __init__(self, app, settings, start_hidden=False):
+        self.app = app
+        self.settings = settings
+        self.tracker = FrameTracker()
+        self.host = HostClient(self.tracker)
+        self.host.interval_ms = round(settings['interval'] * 1000)
+        self.collector = Collector(self.host, self.tracker, settings['interval'])
+        self.collector.fps_target = settings['fps_process']
+        self.presentmon = LocalPresentMon(vendor_dir() / 'presentmon' / 'PresentMon.exe', self.tracker)
+        self.fps_mode = 'local'
+        self.fps_retry_at = 0.0
+        self.widget = MonitorWidget(settings)
+        self.settings_window = SettingsWindow(settings, self.tracker)
+        self.save_timer = QTimer(singleShot=True, interval=600, timeout=self.save)
+        self.screen_timer = QTimer(singleShot=True, interval=700, timeout=self.ensure_visible)
+        self.fps_timer = QTimer(interval=2000, timeout=self.supervise_fps)
+        self.last_snapshot = None
+        self.closing = False
+
+        self.widget.settings_requested.connect(self.show_settings)
+        self.widget.context_requested.connect(lambda pos: self.menu.popup(pos))
+        self.widget.moved.connect(self.remember_position)
+        self.settings_window.changed.connect(self.setting_changed)
+        self.settings_window.helper_start.connect(self.host.start)
+        self.settings_window.helper_stop.connect(self.host.stop)
+        self.collector.snapshot.connect(self.on_snapshot)
+        self.host.state_changed.connect(self.on_helper_state)
+
+        self.build_tray()
+        for screen in app.screens():
+            self.watch_screen(screen)
+        app.screenAdded.connect(self.watch_screen)
+        app.screenAdded.connect(lambda *_: self.screen_timer.start())
+        app.screenRemoved.connect(lambda *_: self.screen_timer.start())
+        app.primaryScreenChanged.connect(lambda *_: self.screen_timer.start())
+        app.aboutToQuit.connect(self.shutdown)
+
+        self.place_initially()
+        if settings['shown'] and not start_hidden:
+            self.widget.show()
+        self.collector.start()
+        self.supervise_fps()
+        self.fps_timer.start()
+        if settings['helper_autostart']:
+            QTimer.singleShot(1500, self.host.start)
+        if settings.error:
+            self.tray.showMessage(APP_NAME, settings.error, QSystemTrayIcon.Warning, 6000)
+        autostart.sync(settings['launch_at_login'])
+
+    # -- tray ---------------------------------------------------------------
+    def build_tray(self):
+        self.tray = QSystemTrayIcon(make_icon(self.settings['accent']))
+        self.tray.setToolTip(APP_NAME)
+        menu = self.menu = QMenu()
+        self.act_show = menu.addAction('Hide widget', self.toggle_widget)
+        menu.addAction('Settings…', self.show_settings)
+        menu.addSeparator()
+        self.act_lock = self.check_action('Lock position', 'locked')
+        self.act_click = self.check_action('Click-through', 'click_through')
+        self.act_top = self.check_action('Always on top', 'always_on_top')
+        menu.addSeparator()
+        self.act_helper = menu.addAction('Start sensor helper (administrator)…', self.toggle_helper)
+        menu.addAction('Reset widget position', self.reset_position)
+        menu.addSeparator()
+        menu.addAction('Quit Prism Monitor', self.app.quit)
+        menu.aboutToShow.connect(self.sync_menu)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self.tray_activated)
+        self.tray.show()
+
+    def check_action(self, text, key):
+        action = QAction(text, self.menu, checkable=True)
+        action.setChecked(self.settings[key])
+        action.toggled.connect(lambda on, k=key: self.set_and_apply(k, on))
+        self.menu.addAction(action)
+        return action
+
+    def sync_menu(self):
+        self.act_show.setText('Hide widget' if self.widget.isVisible() else 'Show widget')
+        for action, key in ((self.act_lock, 'locked'), (self.act_click, 'click_through'), (self.act_top, 'always_on_top')):
+            action.blockSignals(True)
+            action.setChecked(self.settings[key])
+            action.blockSignals(False)
+        connected = self.host.state in ('connected', 'starting')
+        self.act_helper.setText('Stop sensor helper' if connected else 'Start sensor helper (administrator)…')
+
+    def tray_activated(self, reason):
+        if reason == QSystemTrayIcon.Trigger:
+            self.toggle_widget()
+        elif reason == QSystemTrayIcon.DoubleClick:
+            self.show_settings()
+
+    def toggle_widget(self):
+        if self.widget.isVisible():
+            self.widget.hide()
+        else:
+            self.widget.show()
+            self.ensure_visible()
+        self.settings['shown'] = self.widget.isVisible()
+        self.save_timer.start()
+
+    def toggle_helper(self):
+        if self.host.state in ('connected', 'starting'):
+            self.host.stop()
+        else:
+            self.host.start()
+
+    def show_settings(self):
+        w = self.settings_window
+        w.sync_checks()
+        w.fill_processes()
+        w.show()
+        w.raise_()
+        w.activateWindow()
+
+    # -- settings -----------------------------------------------------------
+    def set_and_apply(self, key, value):
+        if self.settings[key] != value:
+            self.settings[key] = value
+            self.setting_changed(key)
+        self.settings_window.sync_checks()
+
+    def setting_changed(self, key):
+        s = self.settings
+        if key in ('always_on_top', 'click_through'):
+            self.widget.apply_flags()
+            if key == 'click_through' and s['click_through']:
+                self.tray.showMessage(APP_NAME, 'Click-through is on. Use the tray icon menu to turn it off.',
+                                      QSystemTrayIcon.Information, 4000)
+        elif key == 'interval':
+            self.collector.set_interval(s['interval'])
+            self.host.set_interval(round(s['interval'] * 1000))
+        elif key == 'launch_at_login':
+            ok, message = autostart.sync(s['launch_at_login'])
+            if not ok:
+                QMessageBox.warning(self.settings_window, APP_NAME, message)
+        elif key == 'fps_process':
+            self.collector.fps_target = s['fps_process']
+        elif key == 'accent':
+            self.tray.setIcon(make_icon(s['accent']))
+        elif key == 'history':
+            self.widget.signature = None
+        elif key == 'visible':
+            self.supervise_fps()
+        self.widget.signature = None
+        self.widget.relayout()
+        self.widget.update()
+        self.save_timer.start()
+
+    def save(self):
+        try:
+            self.settings.save()
+        except OSError as e:
+            self.tray.showMessage(APP_NAME, f'Could not save settings: {e}', QSystemTrayIcon.Warning, 5000)
+
+    # -- position / screens -------------------------------------------------
+    def watch_screen(self, screen):
+        screen.availableGeometryChanged.connect(lambda *_: self.screen_timer.start())
+        screen.geometryChanged.connect(lambda *_: self.screen_timer.start())
+
+    def default_position(self):
+        area = QGuiApplication.primaryScreen().availableGeometry()
+        return QPoint(area.right() - self.widget.width() - 24, area.top() + 24)
+
+    def place_initially(self):
+        pos = self.settings['position']
+        self.widget.move(QPoint(*pos) if pos else self.default_position())
+        self.ensure_visible()
+
+    def ensure_visible(self):
+        """Move the widget back on screen if no monitor shows enough of it."""
+        frame = QRect(self.widget.pos(), self.widget.size())
+        need_w, need_h = min(60, frame.width()), min(40, frame.height())
+        for screen in QGuiApplication.screens():
+            overlap = screen.availableGeometry().intersected(frame)
+            if overlap.width() >= need_w and overlap.height() >= need_h:
+                return
+        self.widget.move(self.default_position())
+        self.remember_position()
+
+    def reset_position(self):
+        self.widget.move(self.default_position())
+        self.widget.show()
+        self.remember_position()
+
+    def remember_position(self):
+        pos = self.widget.pos()
+        self.settings['position'] = [pos.x(), pos.y()]
+        self.save_timer.start()
+
+    # -- data ---------------------------------------------------------------
+    def on_snapshot(self, snap):
+        self.last_snapshot = snap
+        self.widget.update_snapshot(snap)
+        self.settings_window.update_status(snap, (self.host.state, self.host.detail))
+        fps = snap.readings.get('fps')
+        tip = [APP_NAME]
+        for key, label, fmt in (('cpu_temp', 'CPU', '{:.0f} °C'), ('gpu_temp', 'GPU', '{:.0f} °C')):
+            item = snap.readings.get(key)
+            if item:
+                tip.append(f'{label} {fmt.format(item.value)}')
+        if fps:
+            tip.append(f'{fps.value:.0f} fps')
+        self.tray.setToolTip(' · '.join(tip))
+
+    def on_helper_state(self, state):
+        self.settings_window.update_status(self.last_snapshot, (state, self.host.detail))
+        if state == 'failed':
+            self.tray.showMessage(APP_NAME, self.host.detail, QSystemTrayIcon.Warning, 5000)
+        self.supervise_fps()
+
+    def supervise_fps(self):
+        if self.closing:
+            return
+        visible = set(self.settings['visible'])
+        if not visible & {'fps', 'frametime'}:
+            self.presentmon.stop()
+            self.host.set_presentmon(False) if self.host.want_presentmon else None
+            self.collector.fps_note = 'FPS capture is off (FPS and frame time are hidden).'
+            return
+        if os.environ.get('PRISM_MONITOR_FPS_VIA_HELPER') == '1' and self.host.state == 'connected':
+            self.presentmon.stop()   # test hook: exercise the helper relay path
+            self.fps_mode = 'host'
+        if self.fps_mode == 'host':
+            if self.host.state == 'connected':
+                if not self.host.want_presentmon:
+                    self.tracker.reset()
+                    self.host.set_presentmon(True)
+                self.collector.fps_note = 'OK (PresentMon relayed by the sensor helper)'
+                return
+            self.host.want_presentmon = False
+            self.fps_mode = 'local'
+        if self.presentmon.running:
+            self.collector.fps_note = 'OK' if self.presentmon.got_header else 'Starting PresentMon…'
+            return
+        error = self.presentmon.error
+        if error and 'ETW' in error:
+            if self.host.state == 'connected':
+                self.fps_mode = 'host'
+                self.supervise_fps()
+                return
+            self.collector.fps_note = error + ' Start the sensor helper to relay FPS.'
+            if time.monotonic() < self.fps_retry_at:
+                return
+            self.fps_retry_at = time.monotonic() + 30
+        elif error and time.monotonic() < self.fps_retry_at:
+            self.collector.fps_note = error
+            return
+        self.fps_retry_at = time.monotonic() + 5
+        if not self.presentmon.start():
+            self.collector.fps_note = self.presentmon.error
+
+    def shutdown(self):
+        self.closing = True
+        self.fps_timer.stop()
+        self.collector.stop()
+        self.presentmon.stop()
+        self.host.stop()
+        self.settings['shown'] = self.widget.isVisible()
+        self.save()
+        self.tray.hide()
+
+
+def single_instance(name):
+    """True if this is the first instance; otherwise asks the first to show settings."""
+    socket = QLocalSocket()
+    socket.connectToServer(name)
+    if socket.waitForConnected(300):
+        socket.write(b'show\n')
+        socket.waitForBytesWritten(300)
+        return None
+    QLocalServer.removeServer(name)
+    server = QLocalServer()
+    server.setSocketOptions(QLocalServer.UserAccessOption)
+    server.listen(name)
+    return server
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog='PrismMonitor')
+    parser.add_argument('--hidden', action='store_true', help='start with the widget hidden (tray only)')
+    parser.add_argument('--config', help='settings file path (for testing)')
+    parser.add_argument('--smoke-test', action='store_true', help='start, collect a few snapshots, then exit')
+    parser.add_argument('--grab', help='with --smoke-test: save a PNG of the widget (and settings window) here')
+    parser.add_argument('--start-helper', action='store_true', help='start the sensor helper immediately')
+    args, _ = parser.parse_known_args(argv)
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    app = QApplication(sys.argv[:1])
+    app.setApplicationName('PrismMonitor')
+    app.setApplicationDisplayName(APP_NAME)
+    app.setQuitOnLastWindowClosed(False)
+    server = single_instance(f'PrismMonitor-{getpass.getuser()}')
+    if server is None:
+        return 0
+    settings = Settings(args.config)
+    monitor = PrismMonitor(app, settings, start_hidden=args.hidden)
+    app.setWindowIcon(make_icon(settings['accent']))
+
+    def incoming():
+        conn = server.nextPendingConnection()
+        if conn is not None:
+            conn.readyRead.connect(lambda: (conn.readAll(), monitor.widget.show(), monitor.show_settings()))
+    server.newConnection.connect(incoming)
+    if args.start_helper:
+        QTimer.singleShot(200, monitor.host.start)
+    if args.smoke_test:
+        def report():
+            if args.grab:
+                monitor.widget.grab().save(args.grab)
+                monitor.show_settings()
+                monitor.settings_window.refresh_live()
+                for i in range(monitor.settings_window.findChild(__import__('PySide6.QtWidgets', fromlist=['QTabWidget']).QTabWidget).count()):
+                    tabs = monitor.settings_window.findChild(__import__('PySide6.QtWidgets', fromlist=['QTabWidget']).QTabWidget)
+                    tabs.setCurrentIndex(i)
+                    app.processEvents()
+                    monitor.settings_window.grab().save(args.grab.replace('.png', f'-settings{i}.png'))
+            snap = monitor.last_snapshot
+            lines = ['no snapshot'] if snap is None else (
+                [f'{key:12s} {item.value:14.2f} {item.source}' for key, item in sorted(snap.readings.items())]
+                + [f'fans {[(label, round(item.value)) for label, item in snap.fans.values()]}',
+                   f'fps_app {snap.info.get("fps_app")}', f'status {snap.status}'])
+            text = '\n'.join(lines)
+            if sys.stdout is not None:   # windowed builds have no console
+                print(text)
+            if args.grab:
+                Path(args.grab).with_suffix('.txt').write_text(text, encoding='utf-8')
+            app.quit()
+        QTimer.singleShot(int(os.environ.get('PRISM_MONITOR_SMOKE_MS', '4000')), report)
+    return app.exec()

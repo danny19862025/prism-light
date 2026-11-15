@@ -48,3 +48,7 @@ The folder build preserves shared Qt libraries and includes the project's licens
 ## Reference implementations (no code copied)
 
 Protocol and register details were taken from OpenLinkHub (GPL-3.0, Nautilus LCD), LibreHardwareMonitor (MPL-2.0, ITE fan registers, Ryzen Tctl) and AMD's ADL SDK headers (MIT, GPU sensor IDs).
+
+## LibreHardwareMonitorLib 0.9.6 (Prism Monitor sensor helper)
+
+Upstream: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor (release v0.9.6, `LibreHardwareMonitor.zip`, SHA-256 `086d9f1b5a99e643edc2cfaaac16051685b551e4c5ac0b32a57c58c0e529c001`). Mozilla Public License 2.0; the license text is copied to `licenses/LibreHardwareMonitor-MPL-2.0.txt` in the Prism Monitor bundle. Prism Monitor uses the unmodified library and its bundled .NET dependency assemblies (MIT-licensed Microsoft/.NET Foundation packages, HidSharp, BlackSharp.Core, DiskInfoToolkit, RAMSPDToolkit) in a separate helper process, `PrismSensorHost.exe`, built from `monitor/sensorhost/PrismSensorHost.cs`. Source for the library is available at the upstream tag. `tools/fetch_monitor_deps.py` downloads and verifies it; it is not stored in git.
