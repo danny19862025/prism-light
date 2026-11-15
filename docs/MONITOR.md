@@ -4,11 +4,11 @@ A compact, translucent desktop widget showing live CPU, GPU, memory and game FPS
 
 ## Run it
 
-1. Extract `PrismMonitor-windows.zip` and keep the folder together.
-2. Run `PrismMonitor\PrismMonitor.exe`. The widget appears at the top right of your main screen, and a tray icon (four bars) appears in the notification area.
+1. Run `PrismMonitor-Setup-<version>.exe`. It installs for your account only, without an administrator prompt, unless you choose all users in the first dialog. It adds a Start-menu shortcut and an entry under **Settings → Apps** for uninstalling. Windows SmartScreen may warn because the installer is not code-signed: choose **More info → Run anyway** only if you got it from this repository's releases. For a portable copy instead, extract `PrismMonitor-windows.zip`, keep the folder together and run `PrismMonitor\PrismMonitor.exe`.
+2. Start **Prism Monitor** from the Start menu. The widget appears at the top right of your main screen, and a tray icon (four bars) appears in the notification area.
 3. For CPU temperature, CPU package power, measured core clocks and motherboard fans, right-click the tray icon and choose **Start sensor helper (administrator)…**, then approve the Windows prompt. To start it every time, enable **Start the sensor helper on launch** under **Settings → Behaviour**. Windows will still show its prompt each time.
 
-From source: `.venv\Scripts\python monitor_main.py`. Build the release with `.venv\Scripts\python build_monitor.py`.
+From source: `.venv\Scripts\python monitor_main.py`. Build the release with `.venv\Scripts\python build_monitor.py`. It produces `dist\PrismMonitor\`, `dist\PrismMonitor-windows.zip` and, when Inno Setup 6 is installed (`winget install JRSoftware.InnoSetup`), `dist\PrismMonitor-Setup-<version>.exe` from `installer\PrismMonitor.iss`. Uninstalling removes the program and its launch-at-login entry but keeps your settings in `%APPDATA%\PrismMonitor`.
 
 ### Using the widget
 

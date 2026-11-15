@@ -71,3 +71,16 @@ shutil.copytree(root / 'prism_monitor', bundle / 'source' / 'prism_monitor', dir
                 ignore=shutil.ignore_patterns('__pycache__'))
 archive = shutil.make_archive(str(root / 'dist' / 'PrismMonitor-windows'), 'zip', root / 'dist', 'PrismMonitor')
 print(f'Portable folder: {bundle}\nZIP: {archive}')
+
+# Windows installer (Inno Setup 6). Skipped with a note when ISCC is not installed.
+from prism_monitor import __version__  # noqa: E402
+candidates = [Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs' / 'Inno Setup 6' / 'ISCC.exe',
+              Path(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)')) / 'Inno Setup 6' / 'ISCC.exe',
+              Path(os.environ.get('ProgramFiles', r'C:\Program Files')) / 'Inno Setup 6' / 'ISCC.exe']
+iscc = shutil.which('iscc') or next((str(p) for p in candidates if p.is_file()), None)
+if iscc:
+    subprocess.run([iscc, '/Q', f'/DAppVersion={__version__}', str(root / 'installer' / 'PrismMonitor.iss')],
+                   cwd=root, check=True)
+    print(f"Installer: {root / 'dist' / f'PrismMonitor-Setup-{__version__}.exe'}")
+else:
+    print('Inno Setup 6 not found; installer skipped (winget install JRSoftware.InnoSetup).')
