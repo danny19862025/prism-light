@@ -184,8 +184,13 @@ class Window(QMainWindow):
     def report(self, text, error=False):
         self.feedback.setText(text)
         self.feedback.setStyleSheet('color:#ffaeae;' if error else 'color:#b5c6dd;')
+    def busy(self):
+        """True while a user-visible device operation runs. Background work
+        (lighting frames, health checks) runs many times a second and must not
+        grey the controls out and back in, which made them flicker."""
+        return self.future is not None and not getattr(self, 'future_background', False)
     def refresh_controls(self):
-        busy = self.future is not None
+        busy = self.busy()
         for w in (self.connect_btn,self.demo_btn,self.port):
             w.setEnabled(not busy)
         self.disconnect_btn.setEnabled(self.connected and not busy)
@@ -196,24 +201,30 @@ class Window(QMainWindow):
         self.all_btn.setEnabled(self.connected and not busy)
         for key, check in self.checks.items():
             check.setEnabled(self.connected and not busy and check.property('supported'))
-    def job(self, fn, done):
+    def job(self, fn, done, background=False):
         self.future = self.pool.submit(fn)
         self.done = done
-        self.refresh_controls()
+        self.future_background = background
+        if not background:
+            self.refresh_controls()
     def tick(self):
         if self.future and self.future.done():
             future, done = self.future, self.done
+            background = self.future_background
             self.future = None
+            self.future_background = False
             try:
                 done(future.result())
             except Exception as e:
                 self.job_failed(e)
-            self.refresh_controls()
+                background = False
+            if not background:
+                self.refresh_controls()
         self.health_tick += 1
         if self.health_tick >= 40:
             self.health_tick = 0
             if self.connected and not self.backend.demo and not self.future:
-                self.job(self.backend.health, lambda result:None)
+                self.job(self.backend.health, lambda result:None, background=True)
     def job_failed(self, error):
         self.backend.close()
         self.connected = False
@@ -268,12 +279,15 @@ class Window(QMainWindow):
             box.addWidget(label('Direct colour · software brightness' if enabled else 'Unavailable: ambiguous identity' if counts[d.key]>1 else 'Unavailable: no Direct per-LED colour mode or no LEDs', 'sub'))
             for zone, count in d.zones:
                 box.addWidget(label(f'◦  {zone}   /   {count} LEDs', 'sub'))
+            self.zone_controls(d, box)
             self.cards.addWidget(card)
             self.checks[d.key] = check
         if not self.devices:
             self.cards.addWidget(label('Your lighting will appear here.\nConnect the local SDK server or enter demo mode.', 'sub'))
         self.cards.addStretch()
         self.device_title.setText(f'YOUR DEVICES  ·  {len(self.devices)}')
+    def zone_controls(self, device, box):
+        pass
     def select_all(self):
         for c in self.checks.values():
             c.setChecked(bool(c.property('supported')))

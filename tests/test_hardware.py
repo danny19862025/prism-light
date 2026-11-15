@@ -47,7 +47,7 @@ class HardwareTests(unittest.TestCase):
         quiet=patch('prism.hardware.conflicting_rgb_apps',return_value=[]);quiet.start();self.addCleanup(quiet.stop)
     def tearDown(self):self.backend.close();self.hardware.close();self.temp.cleanup()
     def spawn(self,argv,**kwargs):
-        return self.original([sys.executable,str(self.root/'server.py'),'--server-port',argv[argv.index('--server-port')+1]],**kwargs)
+        return self.original([getattr(sys,'_base_executable',sys.executable),str(self.root/'server.py'),'--server-port',argv[argv.index('--server-port')+1]],**kwargs)
     def test_owned_engine_negotiation_and_cleanup(self):
         self.original=subprocess.Popen
         with patch('prism.hardware.subprocess.Popen',side_effect=self.spawn):
@@ -75,6 +75,10 @@ class HardwareTests(unittest.TestCase):
         with patch.object(hardware.sys,'platform','win32'),patch('prism.hardware.subprocess.run',return_value=result):
             self.assertEqual(hardware.conflicting_rgb_apps(),['SignalRGB','another OpenRGB'])
             self.assertEqual(hardware.conflicting_rgb_apps(exclude_pid=99),['SignalRGB'])
+        # SignalRGB's auto-start background service alone does not drive lighting.
+        service_only=subprocess.CompletedProcess([],0,stdout='"SignalRgbService.exe","5252","Services","0","20 K"\n')
+        with patch.object(hardware.sys,'platform','win32'),patch('prism.hardware.subprocess.run',return_value=service_only):
+            self.assertEqual(hardware.conflicting_rgb_apps(),[])
     def test_missing_and_escaping_engine_fail_without_spawn(self):
         for executable in ('missing.exe','../outside.exe'):
             (self.root/'manifest.json').write_text(json.dumps({'executable':executable}))

@@ -10,13 +10,19 @@ import queue
 import sys
 import time
 from PySide6.QtCore import Qt,QTimer,QRectF,QPointF
-from PySide6.QtGui import QColor,QPainter,QPen,QLinearGradient
+from PySide6.QtGui import QPixmap, QColor,QPainter,QPen,QLinearGradient
 from PySide6.QtWidgets import (QApplication,QWidget,QVBoxLayout,QHBoxLayout,QLabel,
     QPushButton,QComboBox,QSlider,QSpinBox,QDoubleSpinBox,QTabWidget,QFormLayout,
     QFileDialog,QInputDialog,QMessageBox,QTableWidget,QTableWidgetItem,QHeaderView,
     QLineEdit,QCheckBox,QAbstractItemView,QScrollArea,QLayout,QDialog,QPlainTextEdit)
 from .ui import Window as BaseWindow,STYLE,label,button,panel
 from .hardware import Hardware,conflict_advice
+from .lcd import DisplayWorker,ROTATIONS
+from . import aio
+from .sensors import SensorHub
+from . import session
+from .fan_chart import FanCurveChart
+from .fans import FanService,MODES as FAN_MODES,FAN_FLOOR,PUMP_FLOOR,FAILSAFE_C
 from .backend import OpenRGB
 from .effects import EFFECTS,NEW_EFFECTS,DENSITY_EFFECTS,render,points,color
 from .scenes import SceneStore,validate
@@ -88,7 +94,15 @@ class DeskCanvas(QWidget):
 class Window(BaseWindow):
     def __init__(self,demo=False,preset_path=None,scene_path=None,auto_hardware=False,hardware=None):
         self.hardware=hardware or Hardware()
-        self.recovering=False;self.recover_selection=[];self.recovery_times=[]
+        self.recovering=False;self.recover_selection=[];self.recovery_times=[];self.headers_prompted=False
+        self.display=DisplayWorker();self.last_metrics={};self.preset_file=Path(preset_path) if preset_path else None
+        self.fans=FanService();self.fan_rows={};self.last_fan_ui=0
+        self.sensors=SensorHub()
+        self.tray=None;self.quitting=False
+        from .presets import default_path as _default_path
+        self.session_path=(Path(preset_path).parent if preset_path else _default_path().parent)/'session.json'
+        self.session=session.load(self.session_path);self.resume_pending=False;self.last_session_save=0
+        import atexit;atexit.register(self.fans.stop)  # hand fans back to the BIOS on any normal exit
         self.layouts={};self.paint={};self.preview_frames={};self.streaming=False
         self.started=time.monotonic();self.sent_frames=0;self.last_send=0;self.last_sample=0
         self.inputs={};self.metrics=Metrics();self.audio=Audio();self.events=Events()
@@ -137,7 +151,7 @@ class Window(BaseWindow):
         self.stream_status=label('Stopped · preview only','sub');editor.insertWidget(6,self.stream_status)
         self.effect.currentTextChanged.connect(self.effect_changed)
         self.build_layout_tab();self.build_sources_tab();self.build_scenes_tab()
-        self.build_automation_tab();self.build_catalog_tab();self.build_status_tab()
+        self.build_automation_tab();self.build_catalog_tab();self.build_status_tab();self.build_display_tab();self.build_fans_tab()
         self.timer.setInterval(30)
         self.reload_scenes();self.refresh_controls()
         from .shell import Shell
@@ -150,13 +164,17 @@ class Window(BaseWindow):
         self.mode_note.setText('Built-in hardware engine · discovery runs automatically at startup.')
         self.apply_btn.setText('Apply solid colour once')
         self.effect_changed()
+        self.shell.connection.layout().addWidget(button('Fan & LED headers',self.show_headers))
         self.shell.connection.layout().addWidget(button('Hardware diagnostics',self.show_hardware_diagnostics))
+        self.autostart_check=QCheckBox('Start with Windows');self.autostart_check.setToolTip('Start Prism Light in the tray when you sign in, and resume your last session')
+        self.autostart_check.toggled.connect(self.set_autostart);self.shell.connection.layout().addWidget(self.autostart_check)
         if auto_hardware and not demo:QTimer.singleShot(0,self.connect_live)
     def layout_for(self,d):
         if d.key not in self.layouts:
             n=next((i for i,v in enumerate(self.devices) if v.key==d.key),0)
             keyboard='keyboard' in d.name.casefold()
-            rows=max(2,min(4,sum(v.supported for v in self.devices)))
+            # One row per device so names and LED strips never overlap.
+            rows=max(2,min(8,sum(v.supported for v in self.devices)))
             self.layouts[d.key]={'x':.08,'y':.16+(n%rows)*.8/rows,'width':.8,'height':.48/rows if keyboard else .04,
                                  'rotation':0,'columns':min(18,d.leds) if keyboard else max(1,d.leds)}
         return self.layouts[d.key]
@@ -254,8 +272,8 @@ class Window(BaseWindow):
               ('Audio','Explicit selected input; RMS and eight frequency probes'),('Screen ambience','Explicit Qt screen capture; portal-only desktops may be unavailable'),
               ('Game integrations','Authenticated local color-event API; game-specific adapters must send events'),
               ('SignalRGB plugins','Metadata index only; host API / device-driver ports not implemented'),
-              ('Cooling','Read-only OS fan RPM and temperatures where available; no fan/pump writes'),
-              ('LCD devices','Display-driver integration not implemented'),('Cloud content & remote control','Not implemented; no SignalRGB account, marketplace or paid-content access')]
+              ('Cooling','Motherboard fan headers on supported ITE chips: monitor, fixed speed or temperature curves, with floors and an 85 °C failsafe (Fans page)'),
+              ('LCD devices','CORSAIR Nautilus LCD Cap: 25 display effects incl. info blocks, overlays, pictures and GIFs (AIO display page)'),('Cloud content & remote control','Not implemented; no SignalRGB account, marketplace or paid-content access')]
         table=QTableWidget(len(rows),2);table.setHorizontalHeaderLabels(['Feature','Implementation / limitation'])
         for i,row in enumerate(rows):
             for j,text in enumerate(row):table.setItem(i,j,QTableWidgetItem(text))
@@ -263,10 +281,93 @@ class Window(BaseWindow):
         table.verticalHeader().setDefaultSectionSize(44);table.setWordWrap(True);table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         box.addWidget(table);box.addWidget(label('Physical LEDs and Windows hardware need validation on the target PC. Preview and protocol tests do not establish device compatibility.','sub'))
         self.tabs.addTab(w,'System && coverage')
+    def build_display_tab(self):
+        from .display_page import DisplayPage
+        from .presets import default_path
+        path=(self.preset_file.parent if self.preset_file else default_path().parent)/'display.json'
+        self.display_page=DisplayPage(self,self.display,path);self.tabs.addTab(self.display_page,'AIO display')
+    def display_data(self,elapsed):
+        metrics=self.last_metrics or {}
+        temps=self.fans.snapshot()['temperatures'] if self.fans.running else []
+        temps=temps or [v for _,v in metrics.get('temperatures',[])]
+        return {'cpu':metrics.get('cpu'),'memory':metrics.get('memory'),'temperature':max(temps) if temps else None,
+                'bands':self.inputs.get('bands'),'effect':self.effect.currentText(),'settings':self.settings(),
+                'inputs':self.inputs,'elapsed':elapsed,**self.sensors.read()}
+    def update_display(self,now,elapsed):
+        page=self.display_page
+        active=self.display.running or page.isVisible()
+        if active:self.sensors.start()
+        wants_fps=page.settings['effect'] in aio.FPS_EFFECTS or (page.settings['overlay']=='FPS' and page.settings['effect'] not in aio.NO_OVERLAY)
+        self.sensors.want_fps(active and wants_fps)
+        page.tick(now,self.display_data(elapsed))
+    def build_fans_tab(self):
+        w=QWidget();box=QVBoxLayout(w);box.addWidget(label('Fans','title'))
+        box.addWidget(label(f'Monitor and set motherboard fan header speeds. Every header starts on Auto (BIOS) and nothing is changed until you pick a mode. '
+            f'Fans never go below {FAN_FLOOR}% and headers marked as pump never below {PUMP_FLOOR}%. If a board sensor reaches {FAILSAFE_C} °C, '
+            'a controlled fan stops spinning, or the hardware reports an error, all fans go back to BIOS control. Closing Prism Light also hands them back. '
+            'Needs administrator rights (Run-PrismLight.cmd). Close other fan software first.','sub'))
+        row=QHBoxLayout()
+        self.fan_start=button('Start fan control',self.start_fans,True);self.fan_stop=button('Stop · return all to BIOS',self.stop_fans)
+        row.addWidget(self.fan_start);row.addWidget(self.fan_stop);row.addStretch();box.addLayout(row)
+        self.fan_table=QTableWidget(0,6);self.fan_table.setHorizontalHeaderLabels(['Header','Speed','Mode','Fixed speed','Pump','State'])
+        self.fan_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeToContents);self.fan_table.horizontalHeader().setSectionResizeMode(5,QHeaderView.Stretch)
+        self.fan_table.verticalHeader().setVisible(False);self.fan_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.fan_table.setSelectionBehavior(QAbstractItemView.SelectRows);self.fan_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        box.addWidget(self.fan_table,1)
+        self.fan_chart=FanCurveChart();box.addWidget(self.fan_chart)
+        self.fan_note=label(self.fans.status,'sub');box.addWidget(self.fan_note)
+        self.tabs.addTab(w,'Fans');self.sync_fan_buttons()
+    def start_fans(self):self.fans.start();self.sync_fan_buttons()
+    def stop_fans(self):
+        self.fans.stop();self.fan_rows={};self.fan_table.setRowCount(0);self.sync_fan_buttons()
+    def sync_fan_buttons(self):
+        running=self.fans.running
+        self.fan_start.setEnabled(not running);self.fan_stop.setEnabled(running)
+        self.fan_note.setText(self.fans.status)
+    def build_fan_rows(self,headers):
+        self.fan_table.setRowCount(len(headers));self.fan_rows={}
+        for r,h in enumerate(headers):
+            self.fan_table.setItem(r,0,QTableWidgetItem(h['label']));self.fan_table.setItem(r,1,QTableWidgetItem('—'))
+            mode=QComboBox();mode.addItems(FAN_MODES);mode.setCurrentText(h['mode']);mode.setEnabled(h['writable'])
+            mode.setAccessibleName(f"Mode for {h['label']}")
+            fixed=QSpinBox();fixed.setRange(0,100);fixed.setSuffix('%');fixed.setValue(h['fixed']);fixed.setAccessibleName(f"Fixed speed for {h['label']}")
+            pump=QCheckBox();pump.setChecked(h['pump']);pump.setAccessibleName(f"{h['label']} is a pump");pump.setEnabled(h['writable'])
+            key=h['key']
+            mode.currentTextChanged.connect(lambda v,k=key:self.fans.configure(k,mode=v))
+            fixed.valueChanged.connect(lambda v,k=key:self.fans.configure(k,fixed=v))
+            pump.toggled.connect(lambda v,k=key:self.fans.configure(k,pump=v))
+            self.fan_table.setCellWidget(r,2,mode);self.fan_table.setCellWidget(r,3,fixed);self.fan_table.setCellWidget(r,4,pump)
+            self.fan_table.setItem(r,5,QTableWidgetItem(''))
+            self.fan_rows[key]=(r,mode,fixed)
+    def update_fans(self,now):
+        if now-self.last_fan_ui<.5:return
+        self.last_fan_ui=now;self.sync_fan_buttons()
+        snap=self.fans.snapshot();headers=snap['headers']
+        if [h['key'] for h in headers]!=list(self.fan_rows):self.build_fan_rows(headers)
+        for h in headers:
+            r,mode,fixed=self.fan_rows[h['key']]
+            if mode.currentText()!=h['mode']:
+                mode.blockSignals(True);mode.setCurrentText(h['mode']);mode.blockSignals(False)
+            fixed.setEnabled(h['writable'] and h['mode']=='Fixed')
+            self.fan_table.item(r,1).setText('not connected' if h['rpm'] is None else f"{h['rpm']} RPM")
+            if not h['writable']:state='Monitor only (controlled by the board on this chip)'
+            elif h['target'] is not None:state=f"Prism Light · {h['target']}%"
+            else:state='BIOS'+('' if h['duty'] is None else f" · {h['duty']}%")
+            if h['note']:state+=' · '+h['note']
+            self.fan_table.item(r,5).setText(state)
+        row=self.fan_table.currentRow()
+        if headers:
+            selected=headers[row] if 0<=row<len(headers) else headers[0]
+            temps=snap['temperatures']
+            self.fan_chart.show_header(selected,max(temps) if temps else None)
+        else:self.fan_chart.show_header(None,None)
+        note=snap['status']
+        if snap['notes']:note+='\n'+'\n'.join(snap['notes'])
+        self.fan_note.setText(note)
     def refresh_controls(self):
         super().refresh_controls()
         if not hasattr(self,'start_btn'):return
-        self.start_btn.setEnabled(self.connected and bool(self.selected()) and not self.streaming and self.future is None)
+        self.start_btn.setEnabled(self.connected and bool(self.selected()) and not self.streaming and not self.busy())
         self.stop_btn.setEnabled(self.streaming)
         self.blackout_btn.setEnabled(self.connected and bool(self.selected()))
         # Source/connection switching during an in-flight write stays serialized.
@@ -293,6 +394,11 @@ class Window(BaseWindow):
                 'No devices detected. Check USB access permissions and supported hardware in Devices.')
             if self.hardware.conflicts:message+=conflict_advice(self.hardware.conflicts)
             self.report(message,bool(self.hardware.conflicts))
+            unset=any(n==0 for d in devices for _,_,n,_,_ in d.resizable)
+            if unset and not self.headers_prompted and not self.recovering:
+                # Fans/strips on addressable headers stay dark until sized.
+                self.headers_prompted=True;QTimer.singleShot(0,self.show_headers)
+            if self.resume_pending and not self.recovering:QTimer.singleShot(0,self.resume_lighting)
     def connect_live(self):
         if self.future:return
         self.disconnect();self.backend=OpenRGB()
@@ -321,6 +427,53 @@ class Window(BaseWindow):
             return
         self.recovering=False;self.streaming=False
         super().job_failed(error)
+    def zone_controls(self,device,box):
+        zones=device.resizable
+        if not zones:return
+        box.addWidget(label('Addressable headers: enter how many LEDs are connected (all fans/strips on that header added together). Saved once by the hardware engine.','sub'))
+        for zone,title,leds,low,high in zones:
+            row=QHBoxLayout();row.addWidget(label(f'{title}','sub'),1)
+            spin=QSpinBox();spin.setRange(low,high);spin.setValue(leds);spin.setSuffix(' LEDs')
+            spin.setAccessibleName(f'LEDs on {title}');row.addWidget(spin)
+            set_btn=QPushButton('Set');set_btn.setAccessibleName(f'Set LEDs on {title}')
+            set_btn.clicked.connect(lambda checked=False,k=device.key,z=zone,t=title,s=spin:self.resize_zone(k,z,t,s.value()))
+            row.addWidget(set_btn);box.addLayout(row)
+    def show_headers(self):
+        zones=[(d,z) for d in self.devices for z in d.resizable]
+        if not self.connected or not zones:
+            self.report('No adjustable fan or LED strip headers were found. Scan devices first.',True);return
+        dialog=QDialog(self);dialog.setWindowTitle('Fan & LED strip headers');layout=QVBoxLayout(dialog)
+        layout.addWidget(label('Fans and LED strips plugged into these headers stay dark until you enter how many LEDs they have. '
+            'Add up the LEDs of everything on one header (often 8–12 per fan; see the fan box). '
+            'Not sure? Keep 40: extra LEDs do no harm. Set unused headers to 0.','sub'))
+        form=QFormLayout();spins=[]
+        for d,(zone,title,leds,low,high) in zones:
+            spin=QSpinBox();spin.setRange(low,high);spin.setValue(leds or min(high,max(low,40)));spin.setSuffix(' LEDs')
+            spin.setAccessibleName(f'LEDs on {title}');form.addRow(f'{d.name} · {title}  (now {leds})',spin);spins.append((d.key,zone,leds,spin))
+        layout.addLayout(form)
+        row=QHBoxLayout();row.addStretch()
+        cancel=QPushButton('Not now');cancel.clicked.connect(dialog.reject);row.addWidget(cancel)
+        def apply():
+            changes=[(k,z,s.value()) for k,z,old,s in spins if s.value()!=old]
+            dialog.accept()
+            if changes:self.resize_zones(changes)
+            else:self.report('Header LED counts unchanged.')
+        ok=QPushButton('Apply');ok.setDefault(True);ok.clicked.connect(apply);row.addWidget(ok);layout.addLayout(row)
+        self.headers_dialog=dialog;dialog.open()
+    def resize_zone(self,key,zone,title,size):self.resize_zones([(key,zone,size)])
+    def resize_zones(self,changes):
+        if not self.connected:self.report('Scan devices first.',True);return
+        if self.future:self.report('Wait for the current device operation to finish.');return
+        was_streaming=self.streaming;selection=self.selected();keys={k for k,_,_ in changes}
+        self.streaming=False
+        self.report(f'Setting LED counts on {len(changes)} header(s)…')
+        def done(devices):
+            self.did_connect(devices)
+            for k,check in self.checks.items():check.setChecked((k in selection or k in keys) and bool(check.property('supported')))
+            self.streaming=was_streaming and bool(self.selected());self.refresh_controls()
+            sizes=', '.join(f'{n} LEDs' for _,_,n in changes)
+            self.report(f'Header LED counts saved ({sizes}). Press Play to light your fans.'+(' Effects resumed.' if self.streaming else ''))
+        self.job(lambda:self.backend.resize_zones(changes),done)
     def did_recover(self,devices,selection):
         self.recovering=False
         self.did_connect(devices)
@@ -402,7 +555,7 @@ class Window(BaseWindow):
         if self.pending_blackout and self.connected and not self.future:self.blackout()
         if self.monitor_future and self.monitor_future.done():
             try:
-                metrics,self.names=self.monitor_future.result();self.inputs['cpu']=metrics['cpu']
+                metrics,self.names=self.monitor_future.result();self.inputs['cpu']=metrics['cpu'];self.last_metrics=metrics
                 self.system_widgets.update_metrics(metrics)
                 sensors=' · '.join(f'{n}: {v:.0f}°C' for n,v in metrics['temperatures'][:5])
                 fans=' · '.join(f'{n}: {v} RPM' for n,v in metrics['fans'][:5])
@@ -435,15 +588,21 @@ class Window(BaseWindow):
                 if i<len(pixels):pixels[i]=tuple(round(v*settings['brightness']/100) for v in color(value))
             self.preview_frames[d.key]=pixels
         self.live_canvas.update();self.layout_canvas.update()
+        self.update_display(now,elapsed);self.update_fans(now)
+        if now-self.last_session_save>10:self.last_session_save=now;self.save_session()
         if self.streaming and not self.future and now-self.last_send>=1/self.fps.value():
             frames={k:v for k,v in self.preview_frames.items() if k in self.selected()}
             if not frames:self.stop_effects();self.report('No supported devices selected. Effects stopped.');return
             self.last_send=now
-            self.job(lambda:self.backend.apply_frame(frames),self.did_frame)
+            self.job(lambda:self.backend.apply_frame(frames),self.did_frame,background=True)
     def did_frame(self,n):
-        self.sent_frames+=1
-        scope='DEMO · simulated' if self.backend.demo else 'OpenRGB · sent, unacknowledged'
-        self.stream_status.setText(f'{scope} · {self.sent_frames} frames · {n} device(s)')
+        # A calm once-a-second summary instead of a counter racing every frame.
+        self.sent_frames+=1;now=time.monotonic()
+        times=self.frame_times=[t for t in getattr(self,'frame_times',[]) if now-t<1]+[now]
+        if now-getattr(self,'last_status',0)<1:return
+        self.last_status=now
+        scope='Demo · simulated' if self.backend.demo else 'Playing'
+        self.stream_status.setText(f'{scope} · {n} device{"" if n==1 else "s"} · {len(times)} fps')
     def start_audio(self):
         try:
             if not self.audio_ids:raise ValueError('No audio input devices found.')
@@ -569,8 +728,60 @@ class Window(BaseWindow):
         self.catalog_table.setRowCount(len(rows))
         for i,r in enumerate(rows):
             for j,key in enumerate(('name','vendor','product','status')):self.catalog_table.setItem(i,j,QTableWidgetItem(r[key]))
+    def enable_tray(self):
+        """Closing the window hides it to the tray instead of quitting."""
+        from PySide6.QtWidgets import QSystemTrayIcon
+        from .tray import Tray
+        if QSystemTrayIcon.isSystemTrayAvailable():self.tray=Tray(self)
+        return self.tray is not None
+    def show_from_tray(self):
+        self.showNormal();self.raise_();self.activateWindow()
+    def quit_app(self):
+        self.quitting=True;self.close();QApplication.quit()
+    def save_session(self):
+        """Remember what is running, so a restart can resume it."""
+        if self.backend.demo:return
+        current=dict(self.session)
+        if self.connected:current.update(scene=self.scene(),effects_playing=self.streaming)
+        current.update(display_on=self.display.running,fans_active=self.fans.running)
+        fans=self.fans.settings()
+        if fans:current['fan_headers']=fans
+        self.session=current;session.save(self.session_path,current)
+    def resume_session(self):
+        """Start what was running last time: AIO display and fans now, lighting once devices are found."""
+        saved=self.session;self.resume_pending=bool(saved.get('scene'))
+        if saved.get('display_on'):self.display_page.start()
+        if saved.get('fans_active'):self.fans.start(saved.get('fan_headers'))
+    def resume_lighting(self):
+        self.resume_pending=False;saved=self.session;scene=saved.get('scene')
+        if not scene or not self.connected or self.backend.demo:return
+        try:self.apply_scene(scene)
+        except Exception as e:self.report(f'Could not restore your last lighting: {e}',True);return
+        if saved.get('effects_playing') and self.selected():
+            self.start_effects();self.report('Welcome back. Your lighting, display and fan settings were restored.')
+    def autostart_enabled(self):
+        from . import autostart
+        return autostart.enabled()
+    def set_autostart(self,on):
+        from . import autostart
+        try:
+            autostart.enable() if on else autostart.disable()
+        except RuntimeError as e:
+            self.report(str(e),True)
+        state=autostart.enabled()
+        self.report('Prism Light will start in the tray when you sign in to Windows, and resume your last lighting, AIO display and fans.'
+                    if state else 'Prism Light will no longer start with Windows.',on and not state)
+        if self.tray:self.tray.set_autostart(state)
+        if hasattr(self,'autostart_check'):
+            self.autostart_check.blockSignals(True);self.autostart_check.setChecked(state);self.autostart_check.blockSignals(False)
+        return state
     def closeEvent(self,event):
-        self.streaming=False;self.audio.stop();self.events.close()
+        if self.tray and not self.quitting:
+            # Keep the AIO display, fans and lighting running in the background.
+            event.ignore();self.hide();self.tray.hidden();return
+        if self.tray:self.tray.remove()
+        self.save_session()
+        self.streaming=False;self.audio.stop();self.events.close();self.display.stop();self.fans.stop();self.sensors.stop()
         self.hardware.cancel.set()
         self.monitor_pool.shutdown(wait=True,cancel_futures=True)
         super().closeEvent(event)
@@ -582,8 +793,22 @@ def main():
     parser.add_argument('--screenshot',help='Save a demo screenshot and exit')
     parser.add_argument('--hardware-smoke-test',action='store_true',help='Verify bundled engine discovery and cleanup without lighting writes')
     parser.add_argument('--hardware-config',help='Override the hardware settings directory')
-    args=parser.parse_args();app=QApplication(sys.argv[:1]);app.setStyle('Fusion');app.setStyleSheet(STYLE+'''\nQTabWidget::pane { border:0; } QTabBar::tab { background:#191e2d; color:#a8b5d0; padding:12px 14px; border-bottom:2px solid transparent; } QTabBar::tab:selected { color:#d9ccff; border-bottom:2px solid #b6a7ff; } QTableWidget { background:#151b29; gridline-color:#30374c; } QHeaderView::section { background:#252d42; padding:10px; border:0; }''')
-    window=Window(demo=args.demo or args.smoke_test or bool(args.screenshot),auto_hardware=not(args.demo or args.smoke_test or args.screenshot),hardware=Hardware(config=args.hardware_config));window.show()
+    parser.add_argument('--background',action='store_true',help='Start hidden in the tray (used by Start with Windows)')
+    args=parser.parse_args();app=QApplication(sys.argv[:1]);app.setStyle('Fusion')
+    from .tray import app_icon,notify_running_instance,SingleInstance
+    background=not(args.demo or args.smoke_test or args.screenshot or args.hardware_smoke_test)
+    if background and notify_running_instance():
+        return 0   # the running copy shows its window; never drive the hardware twice
+    app.setWindowIcon(app_icon());app.setStyleSheet(STYLE+'''\nQTabWidget::pane { border:0; } QTabBar::tab { background:#191e2d; color:#a8b5d0; padding:12px 14px; border-bottom:2px solid transparent; } QTabBar::tab:selected { color:#d9ccff; border-bottom:2px solid #b6a7ff; } QTableWidget { background:#151b29; gridline-color:#30374c; } QHeaderView::section { background:#252d42; padding:10px; border:0; }''')
+    window=Window(demo=args.demo or args.smoke_test or bool(args.screenshot),auto_hardware=not(args.demo or args.smoke_test or args.screenshot),hardware=Hardware(config=args.hardware_config))
+    tray=background and window.enable_tray()
+    if not(args.background and tray):window.show()
+    if tray:
+        app.setQuitOnLastWindowClosed(False)
+        single=SingleInstance(window.show_from_tray)
+        window.tray.set_autostart(window.autostart_enabled())
+        window.autostart_check.blockSignals(True);window.autostart_check.setChecked(window.autostart_enabled());window.autostart_check.blockSignals(False)
+    if background:window.resume_session()
     if args.hardware_smoke_test:
         def hardware_check():
             if window.future:return

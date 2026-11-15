@@ -24,6 +24,8 @@ if errorlevel 1 (
 if errorlevel 1 exit /b 1
 ".venv\Scripts\python.exe" tools\fetch_openrgb.py
 if errorlevel 1 exit /b 1
+".venv\Scripts\python.exe" tools\fetch_sensors.py
+if errorlevel 1 exit /b 1
 if /i "%~1"=="--no-driver" goto complete
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "tools\setup_pawnio.ps1"
 if errorlevel 1 exit /b 1

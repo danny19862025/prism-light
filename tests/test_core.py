@@ -67,7 +67,7 @@ class Server:
                             response=struct.pack('<I',2 if self.action=='grown' and later else 1)
                         elif cmd==1:
                             response=fixture(self.direct)
-                        elif cmd in (50,1100,1101,1050):
+                        elif cmd in (50,1000,1100,1101,1050):
                             continue
                         else:
                             raise AssertionError(cmd)
@@ -166,6 +166,21 @@ class ProtocolTests(unittest.TestCase):
         finally:
             client.close();server.finish()
         self.assertFalse(any(c[1]==1050 for c in server.commands))
+    def test_resize_zone_sends_size_and_reloads(self):
+        from unittest.mock import patch
+        server=Server();client=OpenRGB()
+        try:
+            d=client.connect(server.port)[0]
+            self.assertEqual(d.resizable,[(0,'Main keys',2,1,2)])
+            with self.assertRaisesRegex(ValueError,'accepts 1–2'):client.resize_zone(d.key,0,3)
+            with self.assertRaisesRegex(ValueError,'fixed'):client.resize_zone(d.key,5,1)
+            with patch.object(client,'connect',return_value=['reloaded']) as reload:
+                self.assertEqual(client.resize_zone(d.key,0,1),['reloaded'])
+                reload.assert_called_once_with(server.port)
+        finally:
+            client.close();server.finish()
+        resize=[c for c in server.commands if c[1]==1000]
+        self.assertEqual(resize,[(0,1000,struct.pack('<ii',0,1))])
     def test_truncated_device(self):
         with self.assertRaises(SDKError):parse_device(0,fixture()[:-1])
     def test_color_validation_and_dimming(self):

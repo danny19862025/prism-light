@@ -30,9 +30,12 @@ def child_environment():
 
 # Programs that drive the same SMBus/USB lighting controllers. Running one
 # alongside the bundled engine causes stalled scans, missing devices and
-# lights that revert or flicker.
+# lights that revert or flicker. Only the programs that actually drive
+# devices are listed: background helpers such as SignalRgbService.exe (an
+# auto-start Windows service) do not touch lighting on their own, and warning
+# about them told users to quit something that was not interfering.
 CONFLICTING_APPS={
-    'signalrgb.exe':'SignalRGB','signalrgbservice.exe':'SignalRGB','icue.exe':'Corsair iCUE',
+    'signalrgb.exe':'SignalRGB','icue.exe':'Corsair iCUE',
     'armourycrate.service.exe':'ASUS Armoury Crate','armourycrateservice.exe':'ASUS Armoury Crate',
     'lightingservice.exe':'ASUS Aura','gcc.exe':'GIGABYTE Control Center','rgbfusion.exe':'GIGABYTE RGB Fusion',
     'mysticlight.exe':'MSI Mystic Light','msi.centralserver.exe':'MSI Center','nzxt cam.exe':'NZXT CAM',
@@ -102,6 +105,7 @@ class Hardware:
         reset=sys.platform=='win32' and getattr(sys,'frozen',False)
         if reset:ctypes.windll.kernel32.SetDllDirectoryW(None)
         try:
+            self.spawned_at=time.time()
             self.process=subprocess.Popen(argv,cwd=exe.parent,env=child_environment(),
                 stdout=self.log,stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
@@ -144,6 +148,16 @@ class Hardware:
             self.process=None
         if self.log:self.log.close();self.log=None
     def diagnostics(self):
-        path=self.config/'engine.log'
-        try:return path.read_text(encoding='utf-8',errors='replace')[-8000:]
-        except OSError:return 'No hardware diagnostics recorded yet.'
+        # OpenRGB writes its own flushed log under <config>/logs. Its stdout
+        # (engine.log) can stay empty because a GUI-subsystem process buffers
+        # redirected output, so prefer the newest log from this engine run.
+        texts=[]
+        try:
+            since=getattr(self,'spawned_at',0)-2
+            logs=[p for p in (self.config/'logs').glob('OpenRGB_*.log') if p.stat().st_mtime>=since]
+            if logs:texts.append(max(logs,key=lambda p:p.stat().st_mtime).read_text(encoding='utf-8',errors='replace'))
+        except OSError:pass
+        try:texts.append((self.config/'engine.log').read_text(encoding='utf-8',errors='replace'))
+        except OSError:pass
+        text=max(texts,key=len,default='')
+        return text[-8000:] if text else 'No hardware diagnostics recorded yet.'

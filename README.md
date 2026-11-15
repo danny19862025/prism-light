@@ -45,7 +45,7 @@ The engine is a separate bundled process, runs as your user, uses a private loop
 
 On Linux, USB/I2C access can still require a one-time system udev-rule installation. Bundling software cannot grant kernel permissions. **Hardware → Hardware diagnostics** shows the engine log and can copy a setup command for your terminal. Install the rules, reconnect USB devices, and scan again. On Windows, the default setup opens the official PawnIO installer when needed; driver installation requires the user's Windows administrator approval.
 
-Only devices exposing supported Direct/Custom per-LED modes are enabled. A running engine with zero devices means discovery completed without visible supported hardware, not that physical compatibility has been established. SDK writes have no physical acknowledgement. **Stop** leaves the last frame; **Blackout** sends black. No firmware writes, LED-count changes or fan/pump writes are sent by Prism Light.
+Only devices exposing supported Direct/Custom per-LED modes are enabled. A running engine with zero devices means discovery completed without visible supported hardware, not that physical compatibility has been established. SDK writes have no physical acknowledgement. **Stop** leaves the last frame; **Blackout** sends black. No firmware writes are sent by Prism Light. Fan header writes happen only on the **Fans** page after you change a header from Auto (BIOS) (see below). The only LED-count change is the one you request: motherboard addressable (ARGB) headers report 0 LEDs until you enter how many LEDs are connected under **Devices → Addressable headers** and press **Set**. The bundled engine saves that count for future sessions.
 
 ## Feature coverage
 
@@ -62,9 +62,11 @@ Only devices exposing supported Direct/Custom per-LED modes are enabled. A runni
 | Automation | Opt-in time-of-day and running-executable rules that load saved scenes |
 | Game/app events | Authenticated loopback HTTP color-event input for user-written adapters |
 | Monitoring | Windows/Linux CPU/memory; Linux hwmon temperature and fan RPM if readable |
+| Fan control | Windows, administrator: motherboard fan headers on ITE IT8686E/IT8688E/IT8689E/IT8696E/IT8628E via PawnIO; Auto (BIOS), fixed speed or Quiet/Balanced/Performance curves; GIGABYTE secondary IT87952E monitored only |
+| AIO display | CORSAIR Nautilus LCD Cap (1b1c:0c57/0c55): gallery of 25 original effects (8 info blocks, lighting sync, ambient, motion, audio, clocks, text, picture/GIF) with colours, speed, centre overlay, brightness and rotation |
 | Recovered plugins | Inert metadata index from a user-supplied ZIP/JS file; no plugin runtime or driver port |
 | Legacy presets | Original solid-color presets retained |
-| Not implemented | Cooling control, LCD drivers, native SignalRGB plugin runtime, packaged game-specific adapters, arbitrary OS/key macros, cloud marketplace/account sync, paid content, remote/mobile control |
+| Not implemented | Pump control over USB, other LCD models, native SignalRGB plugin runtime, packaged game-specific adapters, arbitrary OS/key macros, cloud marketplace/account sync, paid content, remote/mobile control |
 
 Hardware compatibility comes from OpenRGB and the conservative Direct-mode check. Imported script counts do not equal controllable devices. Preview draws at most about 1,200 points per device; full lighting frames are sent. The selected FPS is a maximum request rate; busy-worker frames are dropped and actual hardware FPS is unmeasured.
 
@@ -122,3 +124,41 @@ Original code is GPL-3.0-only. OpenRGB 1.1 is bundled as a separate GPL-licensed
 ## Expanded effect collection
 
 The twenty new renderers and their thumbnail images are original Prism Light implementations. The public SignalRGB Marketplace and its Discover/customization documentation were reviewed for broad visual styles and organization; no SignalRGB scripts, paid content, game integrations or storefront images are shipped. See [effect research](docs/EFFECT-RESEARCH.md) for sources and the new effect list. New cards appear first in Discover; search matches display titles, effect names and descriptions. Scale and density are saved in scenes; older scene files remain compatible.
+
+## Fans
+
+Open **Fans** and press **Start fan control** (Prism Light must run as administrator, e.g. through **Run-PrismLight.cmd**). Every header starts on **Auto (BIOS)** and is only read. Choose **Fixed** or a curve per header to control it; curves follow the hottest motherboard sensor. Tick **Pump** on the header your AIO pump uses.
+
+Safety limits: fans never drop below 20 % and pump headers below 70 %. If a board sensor reaches 85 °C, sensors stop reading, a controlled fan stops spinning, or the hardware reports an error, the affected headers (or all of them) are written back to their saved BIOS settings. **Stop**, switching a header to Auto and closing Prism Light restore the original registers. If Windows or Prism Light is killed abruptly, the last speed stays until restart, when the BIOS takes over again. Close other fan tools (FanControl, SignalRGB, GIGABYTE Control Center) before starting. The register map follows LibreHardwareMonitor; hardware access uses the PawnIO LpcIO module bundled with OpenRGB.
+
+## AIO display
+
+Open **AIO display**, pick an effect from the gallery (live previews, filter by category), adjust colours, speed and the centre overlay, then press **Show on AIO**. Info blocks show CPU load, memory and the hottest motherboard temperature; temperatures need **Fans → Start fan control** (read-only monitoring is enough). Your choice is remembered. ![AIO display effects](docs/aio-effects.png) Close iCUE and SignalRGB first. **Stop display** hands the screen back to its built-in picture. Protocol per OpenLinkHub's Nautilus LCD driver; only display commands are sent.
+
+## CPU, GPU and FPS on the AIO display
+
+* **GPU temperature and load** (AMD Radeon) come from the installed AMD driver. No setup.
+* **CPU temperature** (AMD Ryzen Tctl, as shown by Ryzen Master/HWiNFO) is read through the signed PawnIO AMDFamily17 module and needs administrator rights (Run-PrismLight.cmd). Without it, blocks fall back to the hottest motherboard sensor.
+* **FPS** comes from Intel PresentMon, started only while a block or overlay shows FPS. It measures the game in the foreground window and needs administrator rights.
+
+The **Fans** page also draws a diagram of the selected header: its curve or fixed speed, the minimum-speed floor, the 85 °C failsafe and the live operating point. ![Fan curve](docs/fan-curve.png)
+
+## Running in the background
+
+Closing the Prism Light window hides it to the system tray (notification area). The AIO display, fan control and lighting keep running. Click the tray icon to open the window again, or right-click it and choose **Quit Prism Light** to stop everything: quitting hands the AIO screen back to its built-in picture and returns all fans to BIOS control. Starting Prism Light again while it is running just brings the existing window forward, so two copies never control the same hardware.
+
+## Start with Windows and resume
+
+Tick **Start with Windows** (Devices → Hardware bar, or the tray icon menu). Prism Light then starts hidden in the tray about 20 seconds after you sign in, with administrator rights and no UAC prompt each time (a Windows Task Scheduler logon task named "Prism Light", without the default three-day time limit). Untick it to remove the task.
+
+Prism Light remembers what was running (playing lighting effect and its scene, AIO display, fan control and each header's mode) every few seconds and when you quit, and restores it on the next start. Demo sessions never overwrite it.
+
+## iCUE widgets for the AIO screen
+
+Prism Light's info blocks are also available as iCUE widgets, so iCUE itself can drive the pump LCD (no Prism Light needed while iCUE runs). Build them with:
+
+```sh
+.venv/Scripts/python tools/build_icue_widgets.py
+```
+
+This writes nine `.icuewidget` files to `dist/icue-widgets/` (Game HUD, Dual Gauge, Single Gauge, Sensor Bars, Ring Readout, Hex Panels, Sweep Gauge, Dot Ring Clock, Bold Split). Double-click one, or in iCUE open the cooler's **Widgets** page, press **+** and pick the file. Each widget has colour, animation-speed and sensor settings in iCUE; temperatures, loads and FPS come from iCUE's own Sensors and FPS providers. Requires iCUE 5.52 or newer. Only one program can drive the screen: stop Prism Light's AIO display while iCUE shows a widget. Source: `icue-widgets/src/prism-blocks.js`.
