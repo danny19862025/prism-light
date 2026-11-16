@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
@@ -125,6 +125,16 @@ class PrismMonitor:
         self.act_lock = self.check_action('Lock position', 'locked')
         self.act_click = self.check_action('Click-through', 'click_through')
         self.act_top = self.check_action('Always on top', 'always_on_top')
+        layout = menu.addMenu('Layout')
+        group = QActionGroup(layout)
+        self.act_layout = {}
+        for value, text in (('horizontal', 'Horizontal strip'), ('vertical', 'Vertical stand')):
+            action = QAction(text, layout, checkable=True)
+            action.setChecked(self.settings['orientation'] == value)
+            action.triggered.connect(lambda _=False, v=value: self.set_layout(v))
+            group.addAction(action)
+            layout.addAction(action)
+            self.act_layout[value] = action
         menu.addSeparator()
         self.act_helper = menu.addAction('Start sensor helper (administrator)…', self.toggle_helper)
         self.act_setup = menu.addAction('Set up automatic CPU sensors (one-time)…', self.host.setup_task)
@@ -150,6 +160,8 @@ class PrismMonitor:
             action.blockSignals(True)
             action.setChecked(self.settings[key])
             action.blockSignals(False)
+        for value, action in self.act_layout.items():
+            action.setChecked(self.settings['orientation'] == value)
         connected = self.host.state in ('connected', 'starting')
         automatic = self.settings['helper_task']
         self.act_helper.setText('Stop sensor helper' if connected else
@@ -160,6 +172,20 @@ class PrismMonitor:
                                else 'Update CPU sensor helper…')
         self.act_setup.setVisible(not automatic or status != 'ready')
         self.act_setup.setEnabled(self.host.state != 'setup')
+
+    def set_layout(self, orientation):
+        """Switch between the horizontal strip and the vertical stand (from the menu)."""
+        self.set_and_apply('orientation', orientation)
+
+    def keep_anchor(self, old):
+        """After a layout switch, keep the widget flush with the screen side it was on."""
+        screen = QGuiApplication.screenAt(old.center()) or QGuiApplication.primaryScreen()
+        area = screen.availableGeometry()
+        x = old.right() - self.widget.width() + 1 if old.center().x() > area.center().x() else old.left()
+        y = old.bottom() - self.widget.height() + 1 if old.center().y() > area.center().y() else old.top()
+        self.widget.move(x, y)
+        self.ensure_visible()
+        self.remember_position()
 
     def tray_activated(self, reason):
         if reason == QSystemTrayIcon.Trigger:
@@ -264,6 +290,7 @@ class PrismMonitor:
 
     def setting_changed(self, key):
         s = self.settings
+        old = QRect(self.widget.pos(), self.widget.size())
         if key in ('always_on_top', 'click_through'):
             self.widget.apply_flags()
             if key == 'click_through' and s['click_through']:
@@ -289,6 +316,8 @@ class PrismMonitor:
             self.supervise_fps()
         self.widget.signature = None
         self.widget.relayout()
+        if key == 'orientation':
+            self.keep_anchor(old)
         self.widget.update()
         self.save_timer.start()
 

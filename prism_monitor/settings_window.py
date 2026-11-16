@@ -130,9 +130,10 @@ class SettingsWindow(QWidget):
         self.accent_button.clicked.connect(self.pick_accent)
         self.paint_accent()
         form.addRow('Accent colour', self.accent_button)
-        orientation = QComboBox()
+        self.orientation = orientation = QComboBox()
         orientation.addItem('Horizontal strip', 'horizontal')
-        orientation.addItem('Vertical column', 'vertical')
+        orientation.addItem('Vertical stand', 'vertical')
+        orientation.setToolTip('Also in the widget and tray right-click menu: Layout.')
         orientation.setCurrentIndex(0 if self.settings['orientation'] == 'horizontal' else 1)
         orientation.currentIndexChanged.connect(lambda: self.set('orientation', orientation.currentData()))
         form.addRow('Layout', orientation)
@@ -260,6 +261,9 @@ class SettingsWindow(QWidget):
             check.blockSignals(True)
             check.setChecked(self.settings[key])
             check.blockSignals(False)
+        self.orientation.blockSignals(True)
+        self.orientation.setCurrentIndex(self.orientation.findData(self.settings['orientation']))
+        self.orientation.blockSignals(False)
 
     def fps_tab(self):
         w = QWidget()

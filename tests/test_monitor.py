@@ -192,6 +192,37 @@ class WidgetTests(unittest.TestCase):
             w.relayout()
             self.assertGreater(w.height(), w.width())
 
+    def test_vertical_stand_keeps_keep_awake_button_inside(self):
+        from prism_monitor.widget import MonitorWidget
+        with tempfile.TemporaryDirectory() as d:
+            settings = Settings(Path(d) / 's.json')
+            settings['orientation'] = 'vertical'
+            w = MonitorWidget(settings)
+            for active, headline in ((False, 'Off'), (True, '1:23:45 left'),
+                                     (True, '↓ 12.5 MB/s · 3 files downloading')):
+                w.set_awake(active, headline, '')
+                w.grab()
+                self.assertTrue(w.header_rect.contains(w.pill_rect), (active, headline))
+                tip = next(text for rect, text in w.hits if rect == w.pill_rect)
+                if active:
+                    self.assertIn(headline, tip)   # the full status is always in the tooltip
+            settings['orientation'] = 'horizontal'
+            w.relayout()
+            w.set_awake(True, '1:23:45 left', '')
+            w.grab()
+            self.assertTrue(w.header_rect.contains(w.pill_rect))
+            self.assertGreater(w.width(), w.height())
+
+    def test_settings_window_follows_layout_from_menu(self):
+        from prism_monitor.settings_window import SettingsWindow
+        with tempfile.TemporaryDirectory() as d:
+            settings = Settings(Path(d) / 's.json')
+            window = SettingsWindow(settings, FrameTracker(own_pid=999))
+            settings['orientation'] = 'vertical'   # as the tray menu does
+            window.sync_checks()
+            self.assertEqual(window.orientation.currentData(), 'vertical')
+            self.assertEqual(window.orientation.currentText(), 'Vertical stand')
+
     def test_automatic_helper_restarts_after_failure_but_not_after_stop(self):
         from unittest import mock
         from prism_monitor import host as host_module

@@ -302,24 +302,39 @@ class MonitorWidget(QWidget):
         x = r.left() + 2 * s + 4 * (bar_w + 2 * s) + 6 * s
         brand = self.mkfont(px * 0.8, QFont.Bold)
         brand.setLetterSpacing(QFont.PercentageSpacing, 118)
-        p.setFont(brand)
-        p.setPen(theme['text'])
-        p.drawText(QRectF(x, r.top(), r.width(), r.height()), Qt.AlignLeft | Qt.AlignVCenter, 'PRISM')
-        x += QFontMetricsF(brand).horizontalAdvance('PRISM') + 10 * s
-        p.setFont(self.mkfont(px * 0.85))
-        p.setPen(theme['dim'])
+        clock_font = self.mkfont(px * 0.85)
         clock = datetime.now().strftime('%H:%M')
-        p.drawText(QRectF(x, r.top(), r.width(), r.height()), Qt.AlignLeft | Qt.AlignVCenter, clock)
-        clock_right = x + QFontMetricsF(p.font()).horizontalAdvance(clock)
-        # Keep-awake pill, right aligned.
+        brand_w = QFontMetricsF(brand).horizontalAdvance('PRISM') + 10 * s
+        clock_w = QFontMetricsF(clock_font).horizontalAdvance(clock)
+        # Keep-awake pill, right aligned. In a narrow (vertical) widget it shortens step by
+        # step instead of being cut off: full text, short text, then the cup icon alone.
         active, headline, tip = self.awake
-        text = f'Awake · {headline}' if active else 'Keep awake'
+        candidates = [f'Awake · {headline}', headline] if active else ['Keep awake', 'Awake']
         font = self.mkfont(px * 0.8, QFont.DemiBold)
         fm = QFontMetricsF(font)
         icon_w = px * 0.95
-        max_text = max(px * 3, r.right() - clock_right - 16 * s - icon_w - 18 * s)
-        text = fm.elidedText(text, Qt.ElideRight, max_text)
-        pill_w = fm.horizontalAdvance(text) + icon_w + 18 * s
+
+        def width_of(label):
+            return icon_w + 16 * s + (fm.horizontalAdvance(label) + 4 * s if label else 0)
+        text, show_brand = None, True
+        for show_brand in (True, False):
+            room = r.right() - (x + (brand_w if show_brand else 0) + clock_w) - 10 * s
+            text = next((c for c in candidates if width_of(c) <= room), None)
+            if text is None and active and room - width_of('') > px * 3:
+                text = fm.elidedText(headline, Qt.ElideRight, room - width_of('') - 4 * s)
+            if text is not None:
+                break
+        if text is None:
+            text, show_brand = '', False
+        if show_brand:
+            p.setFont(brand)
+            p.setPen(theme['text'])
+            p.drawText(QRectF(x, r.top(), r.width(), r.height()), Qt.AlignLeft | Qt.AlignVCenter, 'PRISM')
+            x += brand_w
+        p.setFont(clock_font)
+        p.setPen(theme['dim'])
+        p.drawText(QRectF(x, r.top(), r.width(), r.height()), Qt.AlignLeft | Qt.AlignVCenter, clock)
+        pill_w = width_of(text)
         pill_h = r.height() * 0.86
         pill = QRectF(r.right() - pill_w, r.center().y() - pill_h / 2, pill_w, pill_h)
         if active:
@@ -334,10 +349,12 @@ class MonitorWidget(QWidget):
         self.paint_cup(p, QRectF(pill.left() + 8 * s, pill.top(), icon_w, pill_h), fg, s, active)
         p.setFont(font)
         p.setPen(fg)
-        p.drawText(QRectF(pill.left() + 8 * s + icon_w + 4 * s, pill.top(), pill_w, pill_h),
-                   Qt.AlignLeft | Qt.AlignVCenter, text)
+        if text:
+            p.drawText(QRectF(pill.left() + 8 * s + icon_w + 4 * s, pill.top(), pill_w, pill_h),
+                       Qt.AlignLeft | Qt.AlignVCenter, text)
         self.pill_rect = pill
-        self.hits.append((pill, (tip or 'Keep awake is off.')
+        self.hits.append((pill, (f'Awake · {headline}\n' if active and text != candidates[0] else '')
+                          + (tip or 'Keep awake is off.')
                           + '\nClick to keep the PC awake for a job, like caffeinate on a Mac.'))
 
     def paint_cup(self, p, box, color, s, steaming):
