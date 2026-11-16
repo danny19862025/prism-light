@@ -76,7 +76,8 @@ PresentMon reads the present events Windows already records through Event Tracin
   * It registers the Task Scheduler task **Prism Monitor Sensor Helper**. The task runs that protected copy with highest privileges for your account only. It has no triggers: it runs only when the widget starts it.
   * The widget connects only if the pipe is served by that exact Program Files executable.
   * **Settings → Sensors → Remove automatic helper…** and the uninstaller remove the task and the folder. Both need administrator approval.
-  * After updating Prism Monitor, setup runs again from the installer, or from **Repair / update** in Settings, so the protected copy matches.
+  * The helper has no window. If it stops for any reason, the widget restarts it silently after 3, 10, 30, then 60 seconds.
+  * After updating Prism Monitor, the protected copy must be refreshed once. The installer does this, or the widget shows a notification: click it, or choose **Update CPU sensor helper…** in the tray menu, and approve the prompt. Prompts are started from a click because Windows only flashes a taskbar button for prompts requested by background apps.
 * LibreHardwareMonitor uses the **PawnIO** driver for ring-0 access. Prism Monitor never installs drivers. If PawnIO is missing, the helper still runs, but CPU temperature, power and fan values stay *n/a*. Install PawnIO yourself from <https://pawnio.eu/> if you want them.
 * PresentMon runs in a kill-on-close job, so it cannot outlive the widget. Its ETW session is stopped on exit and cleared on the next start after a crash.
 

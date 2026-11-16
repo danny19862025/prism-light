@@ -70,6 +70,7 @@ class PrismMonitor:
         self.host.setup_finished.connect(self.on_setup_finished)
         self.collector.snapshot.connect(self.on_snapshot)
         self.host.state_changed.connect(self.on_helper_state)
+        self.host.owner_hwnd = lambda: int(self.widget.winId()) if self.widget.isVisible() else None
 
         self.build_tray()
         for screen in app.screens():
@@ -88,7 +89,7 @@ class PrismMonitor:
         self.fps_timer.start()
         self.hint_pending = False
         if settings['helper_task']:
-            QTimer.singleShot(800, self.start_helper)       # installed task: no prompt
+            QTimer.singleShot(800, self.start_automatic_helper)   # installed task: no prompt
         elif settings['helper_autostart']:
             QTimer.singleShot(1500, self.start_helper)
         elif not settings['setup_hint_shown']:
@@ -137,7 +138,11 @@ class PrismMonitor:
         automatic = self.settings['helper_task']
         self.act_helper.setText('Stop sensor helper' if connected else
                                 'Start sensor helper' if automatic else 'Start sensor helper (administrator)…')
-        self.act_setup.setVisible(not automatic)
+        from .host import task_status
+        status = task_status()
+        self.act_setup.setText('Set up automatic CPU sensors (one-time)…' if status == 'missing'
+                               else 'Update CPU sensor helper…')
+        self.act_setup.setVisible(not automatic or status != 'ready')
         self.act_setup.setEnabled(self.host.state != 'setup')
 
     def tray_activated(self, reason):
@@ -163,6 +168,26 @@ class PrismMonitor:
 
     def start_helper(self):
         self.host.start(use_task=self.settings['helper_task'])
+
+    def start_automatic_helper(self):
+        """Start the installed helper; after an app update, refresh its protected copy first (one prompt)."""
+        from .host import task_status
+        status = task_status()
+        if status == 'ready':
+            self.start_helper()
+        elif status == 'outdated':
+            # Prompting from the background only flashes the taskbar and can time out; a click on the
+            # notification lets Windows show the prompt in front.
+            self.hint_pending = True
+            self.tray.showMessage('Update the CPU sensor helper',
+                                  'Prism Monitor was updated. Click here and approve the Windows prompt once to '
+                                  'show CPU temperature again.', QSystemTrayIcon.Information, 30000)
+            self.host.set_state('failed', 'The sensor helper needs a one-time update: click the tray notification '
+                                'or choose "Update CPU sensor helper" in the tray menu.')
+        else:
+            self.settings['helper_task'] = False
+            self.save()
+            self.show_setup_hint()
 
     def setup_or_start(self):
         """--setup-helper: set up the automatic helper unless it is already current."""
@@ -192,7 +217,10 @@ class PrismMonitor:
             self.host.setup_task()
 
     def on_setup_finished(self, installed, message):
-        self.settings['helper_task'] = installed
+        from .host import task_status
+        # Keep automatic mode while a protected copy exists (e.g. a declined update prompt): the next
+        # launch asks again instead of silently dropping back to "not set up".
+        self.settings['helper_task'] = installed or task_status() != 'missing'
         self.save()
         self.settings_window.update_status(self.last_snapshot, (self.host.state, message))
         self.settings_window.refresh_live()

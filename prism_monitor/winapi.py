@@ -235,7 +235,7 @@ class _ShellExecuteInfo(ctypes.Structure):
 ERROR_CANCELLED = 1223
 
 
-def run_elevated(executable, parameters, directory=None):
+def run_elevated(executable, parameters, directory=None, hwnd=None):
     """Start a process through Windows' consent (UAC) prompt.
 
     Blocks until the user answers. Returns a process handle; raises
@@ -250,6 +250,9 @@ def run_elevated(executable, parameters, directory=None):
     info.lpParameters = parameters
     info.lpDirectory = str(directory) if directory else None
     info.nShow = SW_HIDE
+    # Owning the prompt with one of our windows lets Windows bring it to the front
+    # instead of only flashing a taskbar button (the widget itself never takes focus).
+    info.hwnd = hwnd
     if not shell32.ShellExecuteExW(ctypes.byref(info)):
         error = ctypes.get_last_error()
         if error == ERROR_CANCELLED:

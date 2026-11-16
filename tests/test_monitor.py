@@ -192,6 +192,25 @@ class WidgetTests(unittest.TestCase):
             w.relayout()
             self.assertGreater(w.height(), w.width())
 
+    def test_automatic_helper_restarts_after_failure_but_not_after_stop(self):
+        from unittest import mock
+        from prism_monitor import host as host_module
+        client = host_module.HostClient()
+        with mock.patch.object(host_module, 'task_status', return_value='ready'):
+            client.mode = 'task'
+            client._fail('The sensor helper stopped.')
+            self.assertTrue(client.restart_timer.isActive())
+            self.assertEqual(client.restart_timer.interval(), 3000)
+            self.assertIn('Restarting automatically', client.detail)
+            client._fail('again')
+            self.assertEqual(client.restart_timer.interval(), 10000)   # backoff
+            client.stop()
+            self.assertFalse(client.restart_timer.isActive())
+            client.mode = 'uac'   # prompt-based helper is never restarted silently
+            client.stopping = False
+            client._fail('x')
+            self.assertFalse(client.restart_timer.isActive())
+
     def test_settings_window_refreshes_status(self):
         from prism_monitor.fps import FrameTracker
         from prism_monitor.settings_window import SettingsWindow

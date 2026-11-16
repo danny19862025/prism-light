@@ -69,7 +69,7 @@ def compile_host():
         return
     if not CSC.is_file():
         raise SystemExit(f'.NET Framework C# compiler not found at {CSC}')
-    argv = [str(CSC), '/nologo', '/optimize+', '/platform:x64', '/target:exe', f'/out:{target}',
+    argv = [str(CSC), '/nologo', '/optimize+', '/platform:x64', '/target:winexe', f'/out:{target}',
             f'/reference:{HOST / "LibreHardwareMonitorLib.dll"}', '/reference:System.Core.dll', str(source)]
     subprocess.run(argv, check=True)
     (HOST / 'PrismSensorHost.exe.config').write_bytes(config.read_bytes())

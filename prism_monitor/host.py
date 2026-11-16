@@ -98,6 +98,23 @@ class HostClient(QObject):
         self._launched.connect(self._on_launched)
         self._setup_done.connect(self._on_setup_done)
         self.expected_server = None
+        self.mode = None            # 'task' (automatic, restartable) or 'uac'
+        self.stopping = False
+        self.failures = 0
+        self.connected_at = 0.0
+        self.restart_timer = QTimer(self, singleShot=True, timeout=lambda: self.start(use_task=True))
+
+    RESTART_DELAYS = (3, 10, 30, 60)
+    owner_hwnd = staticmethod(lambda: None)   # set by the app: a window handle that owns UAC prompts
+
+    def _fail(self, detail):
+        """Report a failure; in automatic mode, restart the helper silently with backoff."""
+        if self.mode == 'task' and not self.stopping and task_status() == 'ready':
+            delay = self.RESTART_DELAYS[min(self.failures, len(self.RESTART_DELAYS) - 1)]
+            self.failures += 1
+            self.restart_timer.start(delay * 1000)
+            detail = f'{detail} Restarting automatically in {delay} s.'
+        self.set_state('failed', detail)
 
     # -- lifecycle --------------------------------------------------------
     def set_state(self, state, detail):
@@ -108,6 +125,9 @@ class HostClient(QObject):
         """Start the helper: through the installed task (no prompt) or the UAC prompt."""
         if self.state in ('starting', 'connected', 'setup'):
             return
+        self.restart_timer.stop()
+        self.stopping = False
+        self.mode = 'task' if use_task else 'uac'
         exe = helper_path()
         if not winapi.WINDOWS:
             self.set_state('failed', 'The sensor helper is Windows-only.')
@@ -131,10 +151,11 @@ class HostClient(QObject):
         self.pipe = 'PrismMonitor-' + secrets.token_hex(12)
         params = f'--pipe {self.pipe} --sid {sid} --parent {__import__("os").getpid()}'
         self.set_state('starting', 'Waiting for the Windows administrator prompt…' + note)
+        owner = self.owner_hwnd()   # read on the GUI thread
 
         def launch():
             try:
-                handle = winapi.run_elevated(exe, params, exe.parent)
+                handle = winapi.run_elevated(exe, params, exe.parent, owner)
                 self._launched.emit(handle, '')
             except PermissionError as e:
                 self._launched.emit(None, str(e))
@@ -157,11 +178,11 @@ class HostClient(QObject):
                                     stdin=subprocess.DEVNULL,  # windowed builds have no stdin handle
                                     timeout=20, creationflags=_no_window())
         except (OSError, subprocess.TimeoutExpired) as e:
-            self.set_state('failed', f'Could not start the sensor helper task: {e}')
+            self._fail(f'Could not start the sensor helper task: {e}')
             return
         if result.returncode != 0:
             message = (result.stderr or result.stdout).strip()
-            self.set_state('failed', f'The sensor helper task did not start: {message}')
+            self._fail(f'The sensor helper task did not start: {message}')
             return
         self.set_state('starting', 'Starting the automatic sensor helper…' + note)
         self.handle = None
@@ -188,10 +209,11 @@ class HostClient(QObject):
         if action == 'uninstall' or self.state in ('connected', 'starting'):
             self.stop()   # the installed copy is replaced or removed
         self.set_state('setup', 'Waiting for the Windows administrator prompt (one-time setup)…')
+        owner = self.owner_hwnd()
 
         def run():
             try:
-                handle = winapi.run_elevated(exe, params, exe.parent)
+                handle = winapi.run_elevated(exe, params, exe.parent, owner)
             except OSError as e:
                 self._setup_done.emit(action, None, str(e))
                 return
@@ -226,11 +248,11 @@ class HostClient(QObject):
     def _try_connect(self):
         if self.handle and winapi.process_exited(self.handle):
             self.retry.stop()
-            self.set_state('failed', 'The sensor helper exited before connecting.')
+            self._fail('The sensor helper exited before connecting.')
             return
         if time.monotonic() > self.connect_deadline:
             self.retry.stop()
-            self.set_state('failed', 'The sensor helper did not open its pipe in time.')
+            self._fail('The sensor helper did not open its pipe in time.')
             return
         socket = QLocalSocket(self)
         socket.connectToServer(self.pipe)
@@ -248,6 +270,7 @@ class HostClient(QObject):
         self.socket = socket
         socket.readyRead.connect(self._read)
         socket.disconnected.connect(self._disconnected)
+        self.connected_at = time.monotonic()
         self.set_state('connected', 'Connected. Reading CPU and motherboard sensors through LibreHardwareMonitor.')
         self.send(f'interval {self.interval_ms}')
         if self.want_presentmon:
@@ -255,18 +278,26 @@ class HostClient(QObject):
         self.watch.start()
 
     def _watch(self):
+        if self.state == 'connected' and self.failures and time.monotonic() - self.connected_at > 60:
+            self.failures = 0   # stable again: next failure restarts quickly
         if self.state == 'connected' and time.monotonic() - self.latest_ts > 15 and self.latest_ts:
             self.detail = 'Connected, but no sensor data for 15 s.'
             self.state_changed.emit(self.state)
 
     def _disconnected(self):
         self.watch.stop()
-        if self.state == 'connected':
-            self.set_state('failed', 'The sensor helper disconnected.')
         with self.lock:
             self.latest = ({}, {}, {})
+        if self.state == 'connected' and not self.stopping:
+            if self.socket is not None:
+                self.socket.deleteLater()
+                self.socket = None
+            self._fail('The sensor helper stopped.')
 
     def stop(self):
+        self.stopping = True
+        self.mode = None
+        self.restart_timer.stop()
         self.retry.stop()
         self.watch.stop()
         if self.socket is not None:
