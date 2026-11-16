@@ -1,12 +1,51 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Separate settings window; every change applies immediately."""
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox,
-                               QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSlider, QSpinBox,
-                               QTabWidget, QVBoxLayout, QWidget)
+import datetime
 
+from PySide6.QtCore import Qt, QTime, QTimer, Signal
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+                               QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
+                               QSlider, QSpinBox, QStackedWidget, QTabWidget, QTimeEdit, QVBoxLayout, QWidget)
+
+from .awake import AFTER, MODES
 from .model import GROUPS, METRICS
+
+STYLE = {
+    'dark': ('#12141c', '#1b1e29', '#262a38', '#eef1f8', '#8e97ab'),
+    'midnight': ('#090e20', '#111a36', '#1f2b52', '#e8edff', '#8c9ad0'),
+    'light': ('#f4f5f9', '#ffffff', '#d9dce5', '#141821', '#5d6576'),
+}
+
+
+def stylesheet(theme, accent):
+    bg, panel, line, text, dim = STYLE.get(theme, STYLE['dark'])
+    return f'''
+    QWidget {{ background: {bg}; color: {text}; font-family: "Segoe UI Variable Text", "Segoe UI"; font-size: 10pt; }}
+    QTabWidget::pane {{ border: 1px solid {line}; border-radius: 10px; background: {panel}; top: -1px; }}
+    QTabBar::tab {{ background: transparent; color: {dim}; padding: 7px 14px; border: none; margin-right: 2px; }}
+    QTabBar::tab:selected {{ color: {text}; border-bottom: 2px solid {accent}; }}
+    QTabBar::tab:hover {{ color: {text}; }}
+    QGroupBox {{ background: {panel}; border: 1px solid {line}; border-radius: 8px; margin-top: 14px; padding: 8px; }}
+    QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; color: {accent}; font-weight: 600; }}
+    QLabel, QStackedWidget {{ background: transparent; }}
+    QLabel#hint {{ color: {dim}; }}
+    QCheckBox, QRadioButton {{ background: transparent; spacing: 7px; }}
+    QPushButton {{ background: {line}; border: 1px solid {line}; border-radius: 6px; padding: 5px 12px; }}
+    QPushButton:hover {{ border-color: {accent}; }}
+    QPushButton#primary {{ background: {accent}; color: {bg}; border-color: {accent}; font-weight: 600; }}
+    QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit, QTimeEdit, QListWidget {{
+        background: {bg}; border: 1px solid {line}; border-radius: 6px; padding: 3px 6px;
+        selection-background-color: {accent}; selection-color: {bg}; }}
+    QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus, QTimeEdit:focus {{ border-color: {accent}; }}
+    QComboBox QAbstractItemView {{ background: {panel}; border: 1px solid {line}; }}
+    QSlider::groove:horizontal {{ height: 4px; background: {line}; border-radius: 2px; }}
+    QSlider::sub-page:horizontal {{ background: {accent}; border-radius: 2px; }}
+    QSlider::handle:horizontal {{ background: {text}; width: 14px; margin: -6px 0; border-radius: 7px; }}
+    QLabel#status {{ background: {bg}; border: 1px solid {line}; border-left: 3px solid {accent};
+                     border-radius: 6px; padding: 8px; }}
+    QToolTip {{ background: {panel}; color: {text}; border: 1px solid {line}; }}
+    '''
 
 FPS_NOTES = (
     '<b>How FPS is measured.</b> Intel PresentMon reads the present events Windows already logs (Event Tracing for '
@@ -29,21 +68,36 @@ class SettingsWindow(QWidget):
     helper_setup = Signal()
     helper_remove = Signal()
 
-    def __init__(self, settings, tracker, parent=None):
+    def __init__(self, settings, tracker, awake=None, parent=None):
         super().__init__(parent)
         self.settings = settings
         self.tracker = tracker
+        self.awake = awake
         self.setWindowTitle('Prism Monitor settings')
-        self.setMinimumWidth(460)
-        tabs = QTabWidget()
+        self.setMinimumWidth(520)
+        self.tabs = tabs = QTabWidget()
+        tabs.setDocumentMode(False)
+        if awake is not None:
+            tabs.addTab(self.awake_tab(), 'Keep awake')
         tabs.addTab(self.appearance_tab(), 'Appearance')
         tabs.addTab(self.metrics_tab(), 'Metrics')
         tabs.addTab(self.behaviour_tab(), 'Behaviour')
         tabs.addTab(self.fps_tab(), 'Game FPS')
         tabs.addTab(self.sensors_tab(), 'Sensors')
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.addWidget(tabs)
+        self.restyle()
         self.refresh = QTimer(self, interval=1500, timeout=self.refresh_live)
+
+    def restyle(self):
+        self.setStyleSheet(stylesheet(self.settings['theme'], self.settings['accent']))
+
+    def show_tab(self, name):
+        titles = {'awake': 'Keep awake', 'fps': 'Game FPS', 'sensors': 'Sensors'}
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i) == titles.get(name, name):
+                self.tabs.setCurrentIndex(i)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -58,6 +112,8 @@ class SettingsWindow(QWidget):
         if self.settings[key] != value:
             self.settings[key] = value
             self.changed.emit(key)
+            if key in ('theme', 'accent'):
+                self.restyle()
 
     # -- tabs ----------------------------------------------------------------
     def appearance_tab(self):
@@ -65,8 +121,9 @@ class SettingsWindow(QWidget):
         form = QFormLayout(w)
         theme = QComboBox()
         theme.addItem('Dark', 'dark')
+        theme.addItem('Midnight', 'midnight')
         theme.addItem('Light', 'light')
-        theme.setCurrentIndex(0 if self.settings['theme'] == 'dark' else 1)
+        theme.setCurrentIndex(max(0, theme.findData(self.settings['theme'])))
         theme.currentIndexChanged.connect(lambda: self.set('theme', theme.currentData()))
         form.addRow('Theme', theme)
         self.accent_button = QPushButton()
@@ -86,6 +143,12 @@ class SettingsWindow(QWidget):
                                                      lambda v: self.set('opacity', v / 100)))
         form.addRow('Widget scale', self.slider(60, 200, round(self.settings['scale'] * 100), '%',
                                                 lambda v: self.set('scale', v / 100)))
+        for key, text in (('header', 'Show the title bar (clock and keep-awake button)'),
+                          ('color_levels', 'Colour hot temperatures and near-full memory amber/red')):
+            check = QCheckBox(text)
+            check.setChecked(self.settings[key])
+            check.toggled.connect(lambda v, k=key: self.set(k, v))
+            form.addRow(check)
         graphs = QCheckBox('Show history graphs')
         graphs.setChecked(self.settings['graphs'])
         graphs.toggled.connect(lambda v: self.set('graphs', v))
@@ -301,11 +364,209 @@ class SettingsWindow(QWidget):
         layout.addStretch()
         return w
 
+    def awake_tab(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        self.awake_status = QLabel(objectName='status')
+        self.awake_status.setWordWrap(True)
+        layout.addWidget(self.awake_status)
+
+        job = QGroupBox('Keep the PC awake')
+        form = QFormLayout(job)
+        self.awake_mode = QComboBox()
+        for key, label in MODES.items():
+            self.awake_mode.addItem(label, key)
+        self.awake_mode.setCurrentIndex(self.awake_mode.findData('downloads'))
+        form.addRow('Job', self.awake_mode)
+        self.awake_params = QStackedWidget()
+        pages = {}
+        for key in MODES:
+            pages[key] = QLabel()
+            pages[key].setWordWrap(True)
+            pages[key].setAlignment(Qt.AlignLeft | Qt.AlignTop)
+            pages[key].setObjectName('hint')
+        pages['indefinite'].setText('Until you turn it off, like caffeinate with no options.')
+        self.awake_minutes = QSpinBox(minimum=1, maximum=24 * 60, suffix=' min', value=self.settings['awake_minutes'])
+        pages['duration'] = self.awake_minutes
+        self.awake_until = QTimeEdit(QTime.currentTime().addSecs(3600))
+        self.awake_until.setDisplayFormat('HH:mm')
+        pages['until_time'] = self.awake_until
+        self.awake_app = QComboBox(editable=True)
+        self.awake_app.lineEdit().setPlaceholderText('App name, e.g. HandBrake.exe')
+        pages['process'] = self.awake_app
+        pages['downloads'].setText('Stays awake while files are downloading in the folder below or the network '
+                                   'is busy, then ends once both have been quiet for the set time. '
+                                   'Works for browsers, Steam, game launchers and torrent apps.')
+        pages['cpu'].setText('Stays awake while the CPU is busy (video exports, renders, builds) and ends once '
+                             'it has stayed below the threshold below for the set time.')
+        self.awake_pages = {}
+        for key in MODES:
+            self.awake_pages[key] = self.awake_params.addWidget(pages[key])
+        self.awake_params.setMaximumHeight(self.fontMetrics().lineSpacing() * 4 + 8)   # fits the 4-line hints at any DPI
+        form.addRow('', self.awake_params)
+        self.awake_mode.currentIndexChanged.connect(self.awake_mode_changed)
+        self.awake_display = QCheckBox('Keep the display on too')
+        self.awake_display.setChecked(self.settings['awake_display'])
+        self.awake_display.toggled.connect(self.awake.set_display)
+        form.addRow(self.awake_display)
+        self.awake_after = QComboBox()
+        for key, label in AFTER.items():
+            self.awake_after.addItem(label, key)
+        self.awake_after.setToolTip('Runs after a 60-second countdown you can cancel. Resets to "Nothing" each time '
+                                    'Prism Monitor starts, so the PC never shuts down by surprise.')
+        self.awake_after.currentIndexChanged.connect(lambda: self.awake.set_after(self.awake_after.currentData()))
+        form.addRow('When finished', self.awake_after)
+        row = QHBoxLayout()
+        self.awake_start = QPushButton('Start', objectName='primary')
+        self.awake_start.clicked.connect(self.start_awake)
+        self.awake_stop = QPushButton('Turn off')
+        self.awake_stop.clicked.connect(self.awake.stop)
+        self.awake_error = QLabel()
+        self.awake_error.setStyleSheet('color:#ff6b6b')
+        row.addWidget(self.awake_start)
+        row.addWidget(self.awake_stop)
+        row.addWidget(self.awake_error, 1)
+        form.addRow(row)
+        layout.addWidget(job)
+
+        tuning = QGroupBox('Job detection')
+        form = QFormLayout(tuning)
+        net = QSpinBox(minimum=1, maximum=100000, suffix=' KB/s', value=self.settings['awake_net_kbps'])
+        net.setToolTip('Downloads count as active while the download rate is at or above this.')
+        net.valueChanged.connect(lambda v: self.set('awake_net_kbps', v))
+        form.addRow('Busy network above', net)
+        cpu = QSpinBox(minimum=1, maximum=99, suffix=' %', value=self.settings['awake_cpu_pct'])
+        cpu.valueChanged.connect(lambda v: self.set('awake_cpu_pct', v))
+        form.addRow('Busy CPU above', cpu)
+        quiet = QDoubleSpinBox(minimum=0.25, maximum=60, singleStep=0.5, decimals=2, suffix=' min',
+                               value=self.settings['awake_quiet_min'])
+        quiet.valueChanged.connect(lambda v: self.set('awake_quiet_min', v))
+        form.addRow('Finished after quiet for', quiet)
+        folder_row = QHBoxLayout()
+        from . import winapi
+        self.awake_folder = QLineEdit(self.settings['awake_folder'])
+        self.awake_folder.setPlaceholderText(winapi.downloads_folder())
+        self.awake_folder.editingFinished.connect(lambda: self.set('awake_folder', self.awake_folder.text().strip()))
+        browse = QPushButton('Browse…')
+        browse.clicked.connect(self.pick_folder)
+        folder_row.addWidget(self.awake_folder, 1)
+        folder_row.addWidget(browse)
+        form.addRow('Download folder', folder_row)
+        layout.addWidget(tuning)
+
+        auto = QGroupBox('Always keep awake while these apps run')
+        box = QVBoxLayout(auto)
+        self.auto_list = QListWidget()
+        self.auto_list.setMaximumHeight(90)
+        for name in self.settings['awake_auto_apps']:
+            self.auto_list.addItem(name)
+        box.addWidget(self.auto_list)
+        add_row = QHBoxLayout()
+        self.auto_add = QComboBox(editable=True)
+        self.auto_add.lineEdit().setPlaceholderText('e.g. obs64.exe, a backup or render app')
+        add = QPushButton('Add')
+        add.clicked.connect(self.add_auto_app)
+        remove = QPushButton('Remove')
+        remove.clicked.connect(self.remove_auto_app)
+        add_row.addWidget(self.auto_add, 1)
+        add_row.addWidget(add)
+        add_row.addWidget(remove)
+        box.addLayout(add_row)
+        layout.addWidget(auto)
+        layout.addStretch()
+        self.awake_mode_changed()
+        return w
+
+    def pick_folder(self):
+        from . import winapi
+        folder = QFileDialog.getExistingDirectory(self, 'Download folder',
+                                                  self.settings['awake_folder'] or winapi.downloads_folder())
+        if folder:
+            self.awake_folder.setText(folder)
+            self.set('awake_folder', folder)
+
+    def fill_open_apps(self, combo):
+        from .awake_ui import open_apps
+        import os
+        text = combo.currentText()
+        combo.clear()
+        try:
+            combo.addItems(open_apps(os.getpid()))
+        except Exception:
+            pass
+        combo.setCurrentText(text)
+
+    def awake_mode_changed(self):
+        mode = self.awake_mode.currentData()
+        self.awake_params.setCurrentIndex(self.awake_pages[mode])
+        if mode == 'process':
+            self.fill_open_apps(self.awake_app)
+
+    def start_awake(self):
+        mode = self.awake_mode.currentData()
+        kw = {}
+        if mode == 'duration':
+            self.set('awake_minutes', self.awake_minutes.value())
+            kw['minutes'] = self.awake_minutes.value()
+        elif mode == 'until_time':
+            t = self.awake_until.time()
+            now = datetime.datetime.now()
+            when = now.replace(hour=t.hour(), minute=t.minute(), second=0, microsecond=0)
+            if when <= now:
+                when += datetime.timedelta(days=1)
+            kw['until'] = when.timestamp()
+        elif mode == 'process':
+            name = self.awake_app.currentText().strip()
+            if name and not name.lower().endswith('.exe'):
+                name += '.exe'
+            kw['processes'] = (name,) if name else ()
+        self.awake_error.setText(self.awake.start(mode, **kw))
+
+    def add_auto_app(self):
+        name = self.auto_add.currentText().strip()
+        if not name:
+            return
+        if not name.lower().endswith('.exe'):
+            name += '.exe'
+        apps = list(self.settings['awake_auto_apps'])
+        if name.casefold() not in {a.casefold() for a in apps}:
+            apps.append(name)
+            self.auto_list.addItem(name)
+            self.set('awake_auto_apps', apps)
+        self.auto_add.setCurrentText('')
+
+    def remove_auto_app(self):
+        row = self.auto_list.currentRow()
+        if row < 0:
+            return
+        self.auto_list.takeItem(row)
+        self.set('awake_auto_apps', [self.auto_list.item(i).text() for i in range(self.auto_list.count())])
+
+    def update_awake(self):
+        if self.awake is None or not self.isVisible():
+            return
+        self.awake_status.setText(self.awake.describe().replace('\n', '<br>'))
+        self.awake_stop.setEnabled(self.awake.session is not None)
+        self.awake_start.setText('Restart' if self.awake.session is not None else 'Start')
+        current = self.awake.session.after if self.awake.session else self.awake.after
+        self.awake_after.blockSignals(True)
+        self.awake_after.setCurrentIndex(self.awake_after.findData(current))
+        self.awake_after.blockSignals(False)
+        display = self.awake.session.display if self.awake.session else self.settings['awake_display']
+        self.awake_display.blockSignals(True)
+        self.awake_display.setChecked(display)
+        self.awake_display.blockSignals(False)
+        if self.awake.session is not None:
+            self.awake_error.setText('')
+
     # -- live state ----------------------------------------------------------
     def update_status(self, snapshot, helper_state):
         self.last = (snapshot, helper_state)
 
     def refresh_live(self):
+        self.update_awake()
+        if self.awake is not None and not self.auto_add.count():
+            self.fill_open_apps(self.auto_add)
         snapshot, helper_state = getattr(self, 'last', (None, ('off', '')))
         status = snapshot.status if snapshot else {}
         names = {'system': 'Windows counters (CPU load/clock, RAM, network, disk)', 'adl': 'AMD GPU driver (ADL)',

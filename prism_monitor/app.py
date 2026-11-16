@@ -13,6 +13,8 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import autostart
+from .awake import AFTER, KeepAwake
+from .awake_ui import AwakeMenu, CountdownDialog
 from .collector import Collector
 from .fps import FrameTracker, LocalPresentMon
 from .host import HostClient, vendor_dir
@@ -23,7 +25,7 @@ from .widget import MonitorWidget
 APP_NAME = 'Prism Monitor'
 
 
-def make_icon(accent):
+def make_icon(accent, awake=False):
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.transparent)
     p = QPainter(pixmap)
@@ -34,6 +36,10 @@ def make_icon(accent):
     p.setBrush(QColor(accent))
     for i, h in enumerate((18, 34, 26, 44)):
         p.drawRoundedRect(QRectF(11 + i * 11, 52 - h, 8, h), 3, 3)
+    if awake:   # keep-awake badge
+        p.setBrush(QColor('#ffb547'))
+        p.setPen(QColor(20, 23, 32))
+        p.drawEllipse(QRectF(40, 2, 22, 22))
     p.end()
     return QIcon(pixmap)
 
@@ -52,7 +58,9 @@ class PrismMonitor:
         self.fps_mode = 'local'
         self.fps_retry_at = 0.0
         self.widget = MonitorWidget(settings)
-        self.settings_window = SettingsWindow(settings, self.tracker)
+        self.awake = KeepAwake(settings)
+        self.countdown = None
+        self.settings_window = SettingsWindow(settings, self.tracker, self.awake)
         self.save_timer = QTimer(singleShot=True, interval=600, timeout=self.save)
         self.screen_timer = QTimer(singleShot=True, interval=700, timeout=self.ensure_visible)
         self.fps_timer = QTimer(interval=2000, timeout=self.supervise_fps)
@@ -62,6 +70,8 @@ class PrismMonitor:
         self.widget.settings_requested.connect(self.show_settings)
         self.widget.context_requested.connect(lambda pos: self.menu.popup(pos))
         self.widget.moved.connect(self.remember_position)
+        self.awake.changed.connect(self.on_awake_changed)
+        self.awake.finished.connect(self.on_awake_finished)
         self.settings_window.changed.connect(self.setting_changed)
         self.settings_window.helper_start.connect(self.start_helper)
         self.settings_window.helper_stop.connect(self.host.stop)
@@ -105,6 +115,12 @@ class PrismMonitor:
         menu = self.menu = QMenu()
         self.act_show = menu.addAction('Hide widget', self.toggle_widget)
         menu.addAction('Settings…', self.show_settings)
+        menu.addSeparator()
+        self.awake_menu = AwakeMenu(self.awake, os.getpid(), menu)
+        self.awake_menu.settings_requested.connect(lambda: self.show_settings('awake'))
+        self.awake_menu.error.connect(lambda m: self.tray.showMessage('Keep awake', m, QSystemTrayIcon.Warning, 5000))
+        self.widget.awake_requested.connect(lambda pos: self.awake_menu.popup(pos))
+        menu.addMenu(self.awake_menu)
         menu.addSeparator()
         self.act_lock = self.check_action('Lock position', 'locked')
         self.act_click = self.check_action('Click-through', 'click_through')
@@ -229,10 +245,12 @@ class PrismMonitor:
         if installed:
             self.start_helper()
 
-    def show_settings(self):
+    def show_settings(self, tab=None):
         w = self.settings_window
         w.sync_checks()
         w.fill_processes()
+        if tab:
+            w.show_tab(tab)
         w.show()
         w.raise_()
         w.activateWindow()
@@ -264,7 +282,7 @@ class PrismMonitor:
         elif key == 'fps_process':
             self.collector.fps_target = s['fps_process']
         elif key == 'accent':
-            self.tray.setIcon(make_icon(s['accent']))
+            self.tray.setIcon(make_icon(s['accent'], self.awake.active))
         elif key == 'history':
             self.widget.signature = None
         elif key == 'visible':
@@ -318,6 +336,7 @@ class PrismMonitor:
     # -- data ---------------------------------------------------------------
     def on_snapshot(self, snap):
         self.last_snapshot = snap
+        self.awake.feed(snap)
         self.widget.update_snapshot(snap)
         self.settings_window.update_status(snap, (self.host.state, self.host.detail))
         fps = snap.readings.get('fps')
@@ -328,7 +347,32 @@ class PrismMonitor:
                 tip.append(f'{label} {fmt.format(item.value)}')
         if fps:
             tip.append(f'{fps.value:.0f} fps')
-        self.tray.setToolTip(' · '.join(tip))
+        if self.awake.active:
+            tip.append(f'Awake: {self.awake.headline()}')
+        self.tray.setToolTip(' · '.join(tip)[:127])
+
+    # -- keep awake ---------------------------------------------------------
+    def on_awake_changed(self):
+        active = self.awake.active
+        self.widget.set_awake(active, self.awake.headline(), self.awake.describe())
+        if active != getattr(self, 'awake_icon', None):
+            self.awake_icon = active
+            self.tray.setIcon(make_icon(self.settings['accent'], active))
+        self.settings_window.update_awake()
+
+    def on_awake_finished(self, message, action):
+        if action == 'none':
+            self.tray.showMessage('Keep awake finished', message + ' Windows can sleep again.',
+                                  QSystemTrayIcon.Information, 8000)
+            return
+        if self.countdown is not None:
+            self.countdown.reject()
+        self.countdown = CountdownDialog(action, message)
+        self.countdown.finished.connect(lambda *_: setattr(self, 'countdown', None))
+        self.countdown.show()
+        self.countdown.raise_()
+        self.tray.showMessage('Keep awake finished', f'{message} {AFTER[action]} in 60 s unless you cancel.',
+                              QSystemTrayIcon.Information, 8000)
 
     def on_helper_state(self, state):
         self.settings_window.update_status(self.last_snapshot, (state, self.host.detail))
@@ -379,6 +423,7 @@ class PrismMonitor:
 
     def shutdown(self):
         self.closing = True
+        self.awake.shutdown()
         self.fps_timer.stop()
         self.collector.stop()
         self.presentmon.stop()

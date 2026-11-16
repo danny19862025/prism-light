@@ -25,6 +25,28 @@ From source: `.venv\Scripts\python monitor_main.py`. Build the release with `.ve
 | Click-through | Clicks pass through the widget to the windows beneath it. Turn it off from the **tray icon menu**, which stays clickable. |
 | Lost widget | Choose **Reset widget position** from the tray menu. If a monitor is unplugged or rearranged, the widget also moves itself back onto a visible screen. |
 
+The title bar at the top of the widget shows the time and a **Keep awake** button (turn it off under **Settings → Appearance**). Temperatures, loads and memory turn amber, then red, as they approach their limits. Themes: Dark, Midnight and Light.
+
+### Keep awake (like `caffeinate` on a Mac)
+
+Click the **Keep awake** button on the widget, or use **Keep awake** in the tray menu, to stop Windows from sleeping until a job is done:
+
+| Job | Ends when |
+|---|---|
+| Indefinitely | You turn it off |
+| For a while (15 min – 8 h, or custom) | The time is up |
+| Until a time | That clock time (tomorrow if it has already passed today) |
+| Until downloads finish | No in-progress download files (`.crdownload`, `.part`, `.partial`, `.!qB`, …) in your Downloads folder **and** the download rate has stayed below 150 KB/s for 2 minutes. This covers browsers, Steam, launchers and torrent apps |
+| While an app runs | The chosen app closes (for example HandBrake, an installer or a game) |
+| Until CPU work finishes | CPU load has stayed below 20 % for 2 minutes (renders, exports, builds) |
+
+* **Keep the display on too** also stops the screen from turning off (`caffeinate -d`).
+* **When finished** can then sleep, hibernate, shut down or lock the PC. A 60-second countdown window appears first, with **Cancel**. This choice resets to *Nothing* every time Prism Monitor starts, so the PC never shuts down because of a choice made days ago. Shut down is a normal Windows shutdown: apps with unsaved work can still stop it.
+* **Always keep awake while these apps run** (**Settings → Keep awake**) holds the PC awake whenever a listed app is open, such as OBS or a backup tool. These holds never run a when-finished action.
+* Thresholds, quiet time and the download folder are under **Settings → Keep awake → Job detection**.
+
+It uses the Windows `SetThreadExecutionState` request, the same one video players use. It needs no administrator rights, and Windows drops it automatically if Prism Monitor quits or crashes. It does not override closing the laptop lid or pressing the power button.
+
 Settings are saved to `%APPDATA%\PrismMonitor\settings.json`. **Launch at login** is off by default. When enabled, it adds a per-user `HKCU\…\Run` entry and needs no administrator rights.
 
 ## Metrics and where they come from

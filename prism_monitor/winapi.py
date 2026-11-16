@@ -425,3 +425,112 @@ def pipe_server_image(pipe_handle):
         return buffer.value
     finally:
         kernel32.CloseHandle(handle)
+
+
+# -- keep awake / power ---------------------------------------------------------
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+ES_DISPLAY_REQUIRED = 0x00000002
+ES_AWAYMODE_REQUIRED = 0x00000040
+
+
+def set_execution_state(system, display=False):
+    """Hold the PC (and optionally the display) awake from the calling thread, or release it.
+
+    Same mechanism as macOS `caffeinate -i/-d`: an assertion Windows drops when this
+    thread or process ends, so a crash can never leave the PC unable to sleep.
+    """
+    if not WINDOWS:
+        return False
+    flags = ES_CONTINUOUS
+    if system:
+        flags |= ES_SYSTEM_REQUIRED | (ES_DISPLAY_REQUIRED if display else 0)
+    kernel32.SetThreadExecutionState.restype = wintypes.DWORD
+    kernel32.SetThreadExecutionState.argtypes = [wintypes.DWORD]
+    return bool(kernel32.SetThreadExecutionState(flags))
+
+
+class _ProcessEntry(ctypes.Structure):
+    _fields_ = [('dwSize', wintypes.DWORD), ('cntUsage', wintypes.DWORD), ('th32ProcessID', wintypes.DWORD),
+                ('th32DefaultHeapID', ctypes.c_size_t), ('th32ModuleID', wintypes.DWORD),
+                ('cntThreads', wintypes.DWORD), ('th32ParentProcessID', wintypes.DWORD),
+                ('pcPriClassBase', ctypes.c_long), ('dwFlags', wintypes.DWORD), ('szExeFile', ctypes.c_wchar * 260)]
+
+
+TH32CS_SNAPPROCESS = 0x2
+INVALID_HANDLE = ctypes.c_void_p(-1).value
+
+
+def running_processes():
+    """{pid: exe name} for every process (names only; no special rights needed)."""
+    if not WINDOWS:
+        return {}
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == INVALID_HANDLE:
+        return {}
+    out = {}
+    try:
+        entry = _ProcessEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            out[entry.th32ProcessID] = entry.szExeFile
+            ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snap)
+    return out
+
+
+def windowed_pids():
+    """PIDs owning a visible, titled top-level window: the apps a user thinks of as "open"."""
+    if not WINDOWS:
+        return set()
+    pids = set()
+    proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def visit(hwnd, _):
+        if user32.IsWindowVisible(hwnd) and user32.GetWindowTextLengthW(hwnd) > 0 and not user32.GetWindow(hwnd, 4):
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            pids.add(pid.value)
+        return True
+    user32.EnumWindows(proc(visit), 0)
+    return pids
+
+
+def downloads_folder():
+    """The user's Downloads folder (honours a relocated folder)."""
+    path = None
+    if WINDOWS:
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r'Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders') as key:
+                path = os.path.expandvars(winreg.QueryValueEx(key, '{374DE290-123F-4565-9164-39C4925E467B}')[0])
+        except OSError:
+            path = None
+    return path or os.path.join(os.path.expanduser('~'), 'Downloads')
+
+
+def sleep_now(hibernate=False):
+    """Sleep or hibernate (no administrator rights needed)."""
+    if not WINDOWS:
+        return False
+    powrprof = ctypes.WinDLL('powrprof')
+    return bool(powrprof.SetSuspendState(bool(hibernate), False, False))
+
+
+def lock_now():
+    return bool(WINDOWS and user32.LockWorkStation())
+
+
+def shutdown_now():
+    """Normal Windows shutdown (apps may still ask to save their work)."""
+    if not WINDOWS:
+        return False
+    import subprocess
+    exe = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', 'shutdown.exe')
+    subprocess.Popen([exe, '/s', '/t', '0'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    return True

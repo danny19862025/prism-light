@@ -8,18 +8,40 @@ import collections
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from .model import BY_KEY, GROUPS, METRICS, format_value, is_fresh
 
 THEMES = {
     'dark': {'bg': QColor(16, 18, 26), 'card': QColor(255, 255, 255, 10), 'border': QColor(255, 255, 255, 22),
-             'text': QColor('#eef1f8'), 'dim': QColor('#8e97ab'), 'na': QColor('#6b7386'), 'track': QColor(255, 255, 255, 9)},
+             'text': QColor('#eef1f8'), 'dim': QColor('#8e97ab'), 'na': QColor('#6b7386'), 'track': QColor(255, 255, 255, 9),
+             'warn': QColor('#ffb547'), 'hot': QColor('#ff6b6b'), 'on_accent': QColor('#0d1020')},
+    'midnight': {'bg': QColor(9, 14, 32), 'card': QColor(120, 150, 255, 16), 'border': QColor(130, 160, 255, 40),
+                 'text': QColor('#e8edff'), 'dim': QColor('#8c9ad0'), 'na': QColor('#5f6a96'), 'track': QColor(130, 160, 255, 14),
+                 'warn': QColor('#ffc060'), 'hot': QColor('#ff7a85'), 'on_accent': QColor('#081028')},
     'light': {'bg': QColor(247, 248, 252), 'card': QColor(0, 0, 0, 9), 'border': QColor(0, 0, 0, 22),
-              'text': QColor('#141821'), 'dim': QColor('#5d6576'), 'na': QColor('#8b92a1'), 'track': QColor(0, 0, 0, 8)},
+              'text': QColor('#141821'), 'dim': QColor('#5d6576'), 'na': QColor('#8b92a1'), 'track': QColor(0, 0, 0, 8),
+              'warn': QColor('#b86e00'), 'hot': QColor('#d12f2f'), 'on_accent': QColor('#ffffff')},
 }
+
+# (warn, hot) thresholds for colouring values by level.
+LEVELS = {'cpu_temp': (75, 88), 'gpu_temp': (75, 85), 'gpu_hotspot': (90, 100), 'cpu_util': (85, 97),
+          'gpu_util': (90, 99), 'ram_used': (80, 92), 'gpu_vram': (85, 95), 'disk_active': (85, 98)}
+
+
+def level(key, item):
+    """'warn', 'hot' or None for a fresh reading."""
+    if item is None or key not in LEVELS:
+        return None
+    value = item.value
+    if key in ('ram_used', 'gpu_vram'):
+        if not item.extra:
+            return None
+        value = 100 * item.value / item.extra
+    warn, hot = LEVELS[key]
+    return 'hot' if value >= hot else 'warn' if value >= warn else None
 
 HINTS = {
     'cpu_temp': 'CPU temperature needs the sensor helper and the PawnIO driver. Right-click the widget or tray '
@@ -52,6 +74,7 @@ def short_device(name):
 class MonitorWidget(QWidget):
     settings_requested = Signal()
     context_requested = Signal(object)   # global QPoint
+    awake_requested = Signal(object)     # global QPoint under the keep-awake button
     moved = Signal()
 
     def __init__(self, settings, parent=None):
@@ -62,6 +85,9 @@ class MonitorWidget(QWidget):
         self.cards = []
         self.hits = []
         self.signature = None
+        self.header_rect = None
+        self.pill_rect = None
+        self.awake = (False, 'Off', '')     # active, headline, tooltip
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setMouseTracking(True)
@@ -85,7 +111,18 @@ class MonitorWidget(QWidget):
             self.move(pos)
             self.show()
 
+    def set_awake(self, active, headline, tooltip):
+        state = (bool(active), headline, tooltip)
+        if state != self.awake:
+            self.awake = state
+            self.update()
+
     def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.pill_rect is not None and self.pill_rect.contains(event.position()):
+            r = self.pill_rect
+            self.awake_requested.emit(self.mapToGlobal(QPoint(round(r.left()), round(r.bottom()) + 2)))
+            event.accept()
+            return
         if event.button() == Qt.LeftButton and not self.settings['locked']:
             handle = self.windowHandle()
             if handle is not None:
@@ -93,6 +130,8 @@ class MonitorWidget(QWidget):
         event.accept()
 
     def mouseDoubleClickEvent(self, event):
+        if self.pill_rect is not None and self.pill_rect.contains(event.position()):
+            return
         if event.button() == Qt.LeftButton:
             self.settings_requested.emit()
 
@@ -105,6 +144,8 @@ class MonitorWidget(QWidget):
 
     def mouseMoveEvent(self, event):
         pos = event.position()
+        over_pill = self.pill_rect is not None and self.pill_rect.contains(pos)
+        self.setCursor(Qt.PointingHandCursor if over_pill else Qt.ArrowCursor)
         for rect, text in self.hits:
             if rect.contains(pos):
                 QToolTip.showText(event.globalPosition().toPoint(), text, self)
@@ -178,7 +219,7 @@ class MonitorWidget(QWidget):
         specs = self.card_specs()
         signature = (tuple((g, tuple(p), tuple(sec)) for g, _, p, sec in specs),
                      self.settings['orientation'], self.settings['scale'], self.settings['font_size'],
-                     self.settings['graphs'], self.settings['history'])
+                     self.settings['graphs'], self.settings['history'], self.settings['header'])
         if signature == self.signature:
             return
         self.signature = signature
@@ -192,7 +233,9 @@ class MonitorWidget(QWidget):
         row_h = px * 1.4
         self.cards = []
         horizontal = self.settings['orientation'] == 'horizontal'
-        x = y = pad
+        header_h = px * 2.0 if self.settings['header'] else 0
+        top = pad + (header_h + gap * 0.75 if header_h else 0)
+        x, y = pad, top
         tallest = 0
         for group, title, primary, secondary in specs:
             rows = len(secondary)
@@ -210,11 +253,12 @@ class MonitorWidget(QWidget):
         if horizontal:
             for card in self.cards:   # equal heights read as one strip
                 card['rect'].setHeight(tallest)
-            width, height = x - gap + pad, tallest + 2 * pad
+            width, height = x - gap + pad, top + tallest + pad
         else:
             width, height = card_w + 2 * pad, y - gap + pad
         if not self.cards:
-            width, height = 220 * s, 60 * s
+            width, height = max(card_w + 2 * pad, 260 * s), top + 44 * s
+        self.header_rect = QRectF(pad, pad, width - 2 * pad, header_h) if header_h else None
         self.setFixedSize(round(width), round(height))
 
     # -- painting ----------------------------------------------------------
@@ -232,14 +276,103 @@ class MonitorWidget(QWidget):
         p.setBrush(bg)
         p.drawRoundedRect(outer, 14 * s, 14 * s)
         self.hits = []
+        self.pill_rect = None
+        if self.header_rect is not None:
+            self.paint_header(p, theme, accent, s, px)
         if not self.cards:
             p.setPen(theme['dim'])
             p.setFont(self.mkfont(px))
-            p.drawText(outer, Qt.AlignCenter, 'No metrics selected — double-click for settings')
+            body = outer.adjusted(0, self.header_rect.bottom() if self.header_rect else 0, 0, 0)
+            p.drawText(body, Qt.AlignCenter, 'No metrics selected — double-click for settings')
             return
         now = time.monotonic()
         for card in self.cards:
             self.paint_card(p, card, theme, accent, s, px, now)
+
+    def paint_header(self, p, theme, accent, s, px):
+        r = self.header_rect
+        # Brand mark: the four bars from the tray icon.
+        bar_w, unit = 3.2 * s, r.height() * 0.62
+        base = r.center().y() + unit / 2
+        p.setPen(Qt.NoPen)
+        p.setBrush(accent)
+        for i, h in enumerate((0.42, 0.78, 0.6, 1.0)):
+            p.drawRoundedRect(QRectF(r.left() + 2 * s + i * (bar_w + 2 * s), base - unit * h, bar_w, unit * h),
+                              1.2 * s, 1.2 * s)
+        x = r.left() + 2 * s + 4 * (bar_w + 2 * s) + 6 * s
+        brand = self.mkfont(px * 0.8, QFont.Bold)
+        brand.setLetterSpacing(QFont.PercentageSpacing, 118)
+        p.setFont(brand)
+        p.setPen(theme['text'])
+        p.drawText(QRectF(x, r.top(), r.width(), r.height()), Qt.AlignLeft | Qt.AlignVCenter, 'PRISM')
+        x += QFontMetricsF(brand).horizontalAdvance('PRISM') + 10 * s
+        p.setFont(self.mkfont(px * 0.85))
+        p.setPen(theme['dim'])
+        clock = datetime.now().strftime('%H:%M')
+        p.drawText(QRectF(x, r.top(), r.width(), r.height()), Qt.AlignLeft | Qt.AlignVCenter, clock)
+        clock_right = x + QFontMetricsF(p.font()).horizontalAdvance(clock)
+        # Keep-awake pill, right aligned.
+        active, headline, tip = self.awake
+        text = f'Awake · {headline}' if active else 'Keep awake'
+        font = self.mkfont(px * 0.8, QFont.DemiBold)
+        fm = QFontMetricsF(font)
+        icon_w = px * 0.95
+        max_text = max(px * 3, r.right() - clock_right - 16 * s - icon_w - 18 * s)
+        text = fm.elidedText(text, Qt.ElideRight, max_text)
+        pill_w = fm.horizontalAdvance(text) + icon_w + 18 * s
+        pill_h = r.height() * 0.86
+        pill = QRectF(r.right() - pill_w, r.center().y() - pill_h / 2, pill_w, pill_h)
+        if active:
+            p.setPen(Qt.NoPen)
+            p.setBrush(accent)
+            fg = theme['on_accent']
+        else:
+            p.setPen(QPen(theme['border'], 1))
+            p.setBrush(theme['card'])
+            fg = theme['dim']
+        p.drawRoundedRect(pill, pill_h / 2, pill_h / 2)
+        self.paint_cup(p, QRectF(pill.left() + 8 * s, pill.top(), icon_w, pill_h), fg, s, active)
+        p.setFont(font)
+        p.setPen(fg)
+        p.drawText(QRectF(pill.left() + 8 * s + icon_w + 4 * s, pill.top(), pill_w, pill_h),
+                   Qt.AlignLeft | Qt.AlignVCenter, text)
+        self.pill_rect = pill
+        self.hits.append((pill, (tip or 'Keep awake is off.')
+                          + '\nClick to keep the PC awake for a job, like caffeinate on a Mac.'))
+
+    def paint_cup(self, p, box, color, s, steaming):
+        """A small coffee cup, drawn so it matches the theme (no emoji font needed)."""
+        w = box.width()
+        cup = QRectF(box.left(), box.center().y() - w * 0.18, w * 0.72, w * 0.56)
+        p.save()
+        p.setPen(QPen(color, max(1.0, 1.25 * s), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(color if steaming else Qt.NoBrush)
+        path = QPainterPath()
+        path.moveTo(cup.topLeft())
+        path.lineTo(cup.topRight())
+        path.lineTo(cup.right() - cup.width() * 0.12, cup.bottom())
+        path.lineTo(cup.left() + cup.width() * 0.12, cup.bottom())
+        path.closeSubpath()
+        p.drawPath(path)
+        p.setBrush(Qt.NoBrush)
+        p.drawArc(QRectF(cup.right() - w * 0.1, cup.top() + w * 0.06, w * 0.3, w * 0.28), -90 * 16, 180 * 16)
+        if steaming:
+            for i in (0.28, 0.56):
+                sx = cup.left() + cup.width() * i
+                steam = QPainterPath(QPointF(sx, cup.top() - w * 0.08))
+                steam.cubicTo(sx - w * 0.08, cup.top() - w * 0.2, sx + w * 0.08, cup.top() - w * 0.28,
+                              sx, cup.top() - w * 0.4)
+                p.drawPath(steam)
+        p.restore()
+
+    def value_color(self, key, item, fresh, theme):
+        if not fresh:
+            return theme['na']
+        if self.settings['color_levels']:
+            lvl = level(key, item)
+            if lvl:
+                return theme[lvl]
+        return theme['text']
 
     def value_text(self, key, now):
         """(text, fresh, item)."""
@@ -291,8 +424,12 @@ class MonitorWidget(QWidget):
         title_font = self.mkfont(px * 0.82, QFont.DemiBold)
         title_font.setLetterSpacing(QFont.PercentageSpacing, 108)
         p.setFont(title_font)
+        dot = px * 0.38
+        p.setPen(Qt.NoPen)
+        p.setBrush(accent)
+        p.drawEllipse(QRectF(inner.left(), inner.top() + px * 0.65 - dot / 2, dot, dot))
         p.setPen(accent)
-        title_rect = QRectF(inner.left(), inner.top(), inner.width(), px * 1.3)
+        title_rect = QRectF(inner.left() + dot + 5 * s, inner.top(), inner.width(), px * 1.3)
         p.drawText(title_rect, Qt.AlignLeft | Qt.AlignVCenter, card['title'].upper())
         device = ''
         snap = self.snapshot
@@ -304,7 +441,7 @@ class MonitorWidget(QWidget):
         if device:
             p.setFont(self.mkfont(px * 0.78))
             p.setPen(theme['dim'])
-            title_w = QFontMetricsF(title_font).horizontalAdvance(card['title'].upper()) + 8 * s
+            title_w = QFontMetricsF(title_font).horizontalAdvance(card['title'].upper()) + dot + 13 * s
             dev_rect = QRectF(inner.left() + title_w, inner.top(), inner.width() - title_w, px * 1.3)
             p.drawText(dev_rect, Qt.AlignRight | Qt.AlignVCenter,
                        QFontMetricsF(p.font()).elidedText(device, Qt.ElideRight, dev_rect.width()))
@@ -331,7 +468,7 @@ class MonitorWidget(QWidget):
             label_w = QFontMetricsF(p.font()).horizontalAdvance(label) + 6 * s
             p.drawText(cell, Qt.AlignLeft | Qt.AlignVCenter, label)
             p.setFont(self.mkfont(px * 0.95, QFont.DemiBold if fresh else QFont.Normal))
-            p.setPen(theme['text'] if fresh else theme['na'])
+            p.setPen(self.value_color(key, item, fresh, theme))
             if not fresh:
                 f = p.font()
                 f.setItalic(True)
@@ -376,12 +513,14 @@ class MonitorWidget(QWidget):
             size *= 0.92   # shrink long values (e.g. "12.4 MB/s") to fit instead of truncating
             font.setPixelSize(max(6, round(size)))
         p.setFont(font)
-        p.setPen(theme['text'] if fresh else theme['na'])
+        p.setPen(self.value_color(key, item, fresh, theme))
         p.drawText(value_rect, Qt.AlignLeft | Qt.AlignVCenter, QFontMetricsF(font).elidedText(text, Qt.ElideRight, cell.width()))
         bottom = value_rect.bottom()
         if self.settings['graphs']:
             graph = QRectF(cell.left(), bottom + 4 * s, cell.width(), 22 * s)
-            self.paint_graph(p, self.history.get(key, ()), graph, metric.graph_max, theme, accent, s)
+            lvl = level(key, item) if fresh and self.settings['color_levels'] else None
+            self.paint_graph(p, self.history.get(key, ()), graph, metric.graph_max, theme,
+                             theme[lvl] if lvl else accent, s)
             bottom = graph.bottom()
         self.hits.append((QRectF(cell.left(), cell.top(), cell.width(), bottom - cell.top()),
                           f'{label}: {text}\n' + self.hint(key, item, fresh)))
@@ -410,8 +549,12 @@ class MonitorWidget(QWidget):
             else:
                 path.lineTo(pt)
         line = QColor(accent)
-        area = QColor(accent)
-        area.setAlpha(46)
+        area = QLinearGradient(0, rect.top(), 0, rect.bottom())
+        top_c, bottom_c = QColor(accent), QColor(accent)
+        top_c.setAlpha(96)
+        bottom_c.setAlpha(6)
+        area.setColorAt(0, top_c)
+        area.setColorAt(1, bottom_c)
         p.save()
         p.setClipRect(rect)
         for path in paths:

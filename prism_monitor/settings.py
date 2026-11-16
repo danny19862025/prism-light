@@ -8,13 +8,15 @@ from pathlib import Path
 from .model import BY_KEY, DEFAULT_VISIBLE
 
 DEFAULTS = {
-    'theme': 'dark',                 # dark | light
+    'theme': 'dark',                 # dark | midnight | light
     'accent': '#7c9cff',
     'font_size': 10,                 # pt, base text size
     'opacity': 0.82,                 # background opacity 0.2–1.0
     'scale': 1.0,                    # 0.6–2.0
     'orientation': 'horizontal',     # horizontal | vertical
     'graphs': True,
+    'header': True,                  # title bar with clock and keep-awake button
+    'color_levels': True,            # tint hot temperatures / near-full memory amber and red
     'history': 60,                   # samples kept per graph
     'visible': list(DEFAULT_VISIBLE),
     'fans_visible': None,            # None = fans reporting > 0 rpm when first seen
@@ -30,6 +32,14 @@ DEFAULTS = {
     'cpu_temp_sensor': '',           # '' = automatic (Tctl/Tdie), else a LibreHardwareMonitor sensor name
     'position': None,                # [x, y] in virtual-desktop coordinates
     'shown': True,
+    # Keep awake (the per-session after-action is deliberately not stored)
+    'awake_display': False,          # also keep the display on (caffeinate -d)
+    'awake_minutes': 60,             # last custom duration
+    'awake_net_kbps': 150,           # download counts as active above this rate
+    'awake_quiet_min': 2.0,          # quiet minutes before a download / CPU job counts as finished
+    'awake_cpu_pct': 20,             # CPU job counts as finished below this load
+    'awake_folder': '',              # '' = the Downloads folder
+    'awake_auto_apps': [],           # exe names that keep the PC awake while running
 }
 
 
@@ -55,7 +65,7 @@ def validate(data):
     for key, default in DEFAULTS.items():
         if key in data:
             out[key] = data[key]
-    out['theme'] = out['theme'] if out['theme'] in ('dark', 'light') else 'dark'
+    out['theme'] = out['theme'] if out['theme'] in ('dark', 'midnight', 'light') else 'dark'
     accent = str(out['accent'])
     out['accent'] = accent if len(accent) == 7 and accent.startswith('#') else DEFAULTS['accent']
     out['font_size'] = _clamp(out['font_size'], 7, 20, 10)
@@ -71,7 +81,14 @@ def validate(data):
     out['position'] = [int(pos[0]), int(pos[1])] if isinstance(pos, (list, tuple)) and len(pos) == 2 else None
     out['fps_process'] = str(out['fps_process'] or '')[:260]
     out['cpu_temp_sensor'] = str(out['cpu_temp_sensor'] or '')[:64]
-    for key in ('graphs', 'always_on_top', 'locked', 'click_through', 'launch_at_login', 'helper_autostart', 'helper_task',
+    out['awake_minutes'] = _clamp(out['awake_minutes'], 1, 24 * 60, 60)
+    out['awake_net_kbps'] = _clamp(out['awake_net_kbps'], 1, 100000, 150)
+    out['awake_quiet_min'] = _clamp(out['awake_quiet_min'], 0.25, 60.0, 2.0)
+    out['awake_cpu_pct'] = _clamp(out['awake_cpu_pct'], 1, 99, 20)
+    out['awake_folder'] = str(out['awake_folder'] or '')[:1024]
+    apps = out['awake_auto_apps']
+    out['awake_auto_apps'] = [str(a)[:260] for a in apps if a][:50] if isinstance(apps, list) else []
+    for key in ('graphs', 'header', 'color_levels', 'awake_display', 'always_on_top', 'locked', 'click_through', 'launch_at_login', 'helper_autostart', 'helper_task',
                 'setup_hint_shown', 'shown'):
         out[key] = bool(out[key])
     return out

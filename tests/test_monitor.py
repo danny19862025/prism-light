@@ -224,5 +224,159 @@ class WidgetTests(unittest.TestCase):
             window.close()
 
 
+class FakePower:
+    def __init__(self):
+        self.calls = []
+        self.procs = set()
+        self.files = []
+
+    def hold(self, display):
+        self.calls.append(('hold', display))
+
+    def release(self):
+        self.calls.append(('release',))
+
+    def processes(self):
+        return set(self.procs)
+
+    def partials(self, folder):
+        return list(self.files)
+
+
+class KeepAwakeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def make(self, **overrides):
+        from prism_monitor.awake import KeepAwake
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        settings = Settings(Path(self.tmp.name) / 's.json')
+        settings['awake_folder'] = self.tmp.name
+        for k, v in overrides.items():
+            settings[k] = v
+        self.now = [1000.0]
+        self.power = FakePower()
+        engine = KeepAwake(settings, power=self.power, clock=lambda: self.now[0])
+        engine.timer.stop()
+        self.finished = []
+        engine.finished.connect(lambda msg, after: self.finished.append((msg, after)))
+        return engine
+
+    def snap(self, net=None, cpu=None):
+        readings = {}
+        if net is not None:
+            readings['net_down'] = Reading(net, 0, 'pdh')
+        if cpu is not None:
+            readings['cpu_util'] = Reading(cpu, 0, 'pdh')
+        return Snapshot(readings=readings)
+
+    def test_duration_holds_then_releases(self):
+        e = self.make()
+        self.assertEqual(e.start('duration', minutes=30, display=True), '')
+        self.assertEqual(self.power.calls[-1], ('hold', True))
+        self.assertEqual(e.headline(), '30:00 left')
+        self.now[0] += 29 * 60
+        e.tick()
+        self.assertTrue(e.active)
+        self.now[0] += 61
+        e.tick()
+        self.assertFalse(e.active)
+        self.assertEqual(self.power.calls[-1], ('release',))
+        self.assertEqual(self.finished[0][1], 'none')
+
+    def test_downloads_wait_for_quiet_network_and_partial_files(self):
+        e = self.make(awake_net_kbps=100, awake_quiet_min=2.0)
+        e.feed(self.snap(net=5 * 1024 * 1024))
+        e.start('downloads')
+        self.assertIn('MB/s', e.headline())
+        e.feed(self.snap(net=1024))                 # network quiet, but a browser file is still partial
+        self.power.files = ['movie.mkv.crdownload']
+        self.now[0] += 600
+        e.tick()
+        self.assertTrue(e.active)
+        self.assertIn('1 file downloading', e.headline())
+        self.power.files = []
+        self.now[0] += 60
+        e.tick()
+        self.assertTrue(e.active)
+        self.assertIn('finishing in 1:00', e.headline())
+        self.now[0] += 61
+        e.tick()
+        self.assertFalse(e.active)
+        self.assertIn('Downloads finished', self.finished[0][0])
+
+    def test_process_mode_ends_when_app_closes(self):
+        e = self.make()
+        self.assertIn('not running', e.start('process', processes=('HandBrake.exe',)))
+        self.power.procs = {'handbrake.exe'}
+        self.assertEqual(e.start('process', processes=('HandBrake.exe',)), '')
+        self.power.procs = set()
+        e.proc_cache = (0.0, set())
+        e.tick()
+        self.assertFalse(e.active)
+        self.assertIn('HandBrake.exe closed', self.finished[0][0])
+
+    def test_cpu_mode_and_after_action_is_per_session(self):
+        e = self.make(awake_cpu_pct=20, awake_quiet_min=1.0)
+        e.set_after('shutdown')
+        e.feed(self.snap(cpu=90))
+        e.start('cpu')
+        e.feed(self.snap(cpu=5))
+        self.now[0] += 30
+        e.tick()
+        self.assertTrue(e.active)
+        self.now[0] += 31
+        e.tick()
+        self.assertEqual(self.finished[0][1], 'shutdown')
+        self.assertNotIn('awake_after', e.settings.data)   # never persisted
+
+    def test_auto_apps_hold_without_after_action(self):
+        e = self.make(awake_auto_apps=['obs64.exe'])
+        self.power.procs = {'obs64.exe'}
+        e.tick()
+        self.assertTrue(e.active)
+        self.assertEqual(e.headline(), 'obs64.exe running')
+        self.power.procs = set()
+        e.proc_cache = (0.0, set())
+        e.tick()
+        self.assertFalse(e.active)
+        self.assertEqual(self.finished, [])
+        self.assertEqual(self.power.calls[-1], ('release',))
+
+    def test_countdown_cancel_never_runs_action(self):
+        from prism_monitor.awake_ui import CountdownDialog
+        ran = []
+        d = CountdownDialog('shutdown', 'Downloads finished.', seconds=2, runner=ran.append)
+        d.step()
+        d.reject()
+        d.step()
+        self.assertEqual(ran, [])
+        d = CountdownDialog('sleep', 'Done.', seconds=2, runner=ran.append)
+        d.step()
+        d.step()
+        self.assertEqual(ran, ['sleep'])
+
+    def test_widget_pill_and_settings_tab(self):
+        from prism_monitor.settings_window import SettingsWindow
+        from prism_monitor.widget import MonitorWidget
+        e = self.make()
+        w = MonitorWidget(e.settings)
+        w.set_awake(True, '1:00:00 left', 'tip')
+        w.grab()
+        self.assertIsNotNone(w.pill_rect)
+        window = SettingsWindow(e.settings, FrameTracker(own_pid=999), e)
+        window.show()
+        window.awake_mode.setCurrentIndex(window.awake_mode.findData('duration'))
+        window.awake_minutes.setValue(5)
+        window.start_awake()
+        self.assertTrue(e.active)
+        window.update_awake()
+        self.assertIn('5:00 left', window.awake_status.text())
+        window.close()
+
+
 if __name__ == '__main__':
     unittest.main()
