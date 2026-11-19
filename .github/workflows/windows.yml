@@ -24,6 +24,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libegl1 libgl1 libopengl0 libfontconfig1 libxkbcommon0 libdbus-1-3
+      - name: Cache checksum-pinned downloads
+        # OpenRGB comes from codeberg.org, which can stall; reuse verified
+        # archives between runs (the fetch scripts re-check every SHA-256).
+        uses: actions/cache@v4
+        with:
+          path: vendor/cache
+          key: vendor-cache-${{ runner.os }}-${{ hashFiles('tools/fetch_openrgb.py') }}
       - run: python -m pip install -r requirements-build.txt
       - run: python -m unittest discover -s tests -v
         env:

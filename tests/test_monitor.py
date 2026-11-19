@@ -10,6 +10,7 @@ from prism_monitor.fps import FrameTracker
 from prism_monitor.model import Reading, Snapshot, format_value, is_fresh, reading
 from prism_monitor.settings import DEFAULTS, Settings, validate
 from prism_monitor.sources import map_host_items
+from qtsafe import QtTestCase
 
 V1 = 'Application,ProcessID,SwapChainAddress,Runtime,SyncInterval,PresentFlags,Dropped,TimeInSeconds,msInPresentAPI,msBetweenPresents'
 V2 = ('Application,ProcessID,SwapChainAddress,PresentRuntime,SyncInterval,PresentFlags,AllowsTearing,PresentMode,'
@@ -170,7 +171,7 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(s['scale'], 1.0)
 
 
-class WidgetTests(unittest.TestCase):
+class WidgetTests(QtTestCase):
     @classmethod
     def setUpClass(cls):
         from PySide6.QtWidgets import QApplication
@@ -276,7 +277,7 @@ class FakePower:
         return list(self.files)
 
 
-class KeepAwakeTests(unittest.TestCase):
+class KeepAwakeTests(QtTestCase):
     @classmethod
     def setUpClass(cls):
         from PySide6.QtWidgets import QApplication
@@ -412,7 +413,7 @@ class KeepAwakeTests(unittest.TestCase):
 
 
 
-class BatteryTests(unittest.TestCase):
+class BatteryTests(QtTestCase):
     @classmethod
     def setUpClass(cls):
         from PySide6.QtWidgets import QApplication

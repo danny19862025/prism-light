@@ -18,6 +18,7 @@ from prism.catalog import import_catalog
 from prism.sources import Events
 from PySide6.QtWidgets import QSpinBox,QPushButton
 from test_core import Server
+from qtsafe import QtTestCase
 
 def scene():
     return dict(effect='Rainbow wave',color='#B6A7FF',secondary='#45E0C2',brightness=80,
@@ -112,7 +113,7 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(events.events.get(timeout=1),{'color':'#FF0000'})
         finally:events.close()
 
-class StudioUITests(unittest.TestCase):
+class StudioUITests(QtTestCase):
     @classmethod
     def setUpClass(cls):
         from PySide6.QtWidgets import QApplication
@@ -122,7 +123,17 @@ class StudioUITests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();root=Path(self.temp.name)
         self.w=Window(preset_path=root/'presets.json',scene_path=root/'studio.json')
         self.w.show();self.w.enter_demo();self.app.processEvents()
-    def tearDown(self):self.w.close();self.app.processEvents();self.temp.cleanup()
+    def tearDown(self):
+        # Destroy the window on the GUI thread now. Left to Python's garbage
+        # collector, it can be freed on a background worker thread (AIO
+        # sender, sensor poller), which crashes Qt on Linux (segfault in CI).
+        import gc
+        from PySide6.QtCore import QCoreApplication,QEvent
+        w=self.w;w.tray=None;w.close()
+        for thread_owner in (w.display,w.fans,w.sensors):thread_owner.stop()
+        w.deleteLater();QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
+        self.app.processEvents();del self.w,w;gc.collect()
+        self.temp.cleanup()
     def spin(self,duration=.3):
         until=time.monotonic()+duration
         while time.monotonic()<until:self.app.processEvents();time.sleep(.005)
@@ -375,7 +386,9 @@ class StudioUITests(unittest.TestCase):
             self.assertEqual(w2.effect.currentText(),'Rainbow wave');self.assertTrue(w2.streaming)
             self.assertIn('Welcome back',w2.feedback.text())
         finally:
-            w2.streaming=False;w2.display.stop();w2.fans.stop();w2.close()
+            from PySide6.QtCore import QCoreApplication,QEvent
+            w2.streaming=False;w2.display.stop();w2.fans.stop();w2.sensors.stop();w2.close()
+            w2.deleteLater();QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
     def test_demo_runs_never_overwrite_the_saved_session(self):
         w=self.w;w.enter_demo();w.save_session()
         self.assertFalse(w.session_path.exists())

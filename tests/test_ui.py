@@ -9,8 +9,9 @@ import unittest
 from PySide6.QtWidgets import QApplication
 from prism.ui import Window,STYLE
 from test_core import Server
+from qtsafe import QtTestCase
 
-class UITests(unittest.TestCase):
+class UITests(QtTestCase):
     @classmethod
     def setUpClass(cls):
         cls.app=QApplication.instance() or QApplication([])
@@ -20,7 +21,7 @@ class UITests(unittest.TestCase):
         self.window=Window(preset_path=Path(self.temp.name)/'presets.json')
         self.window.show();self.app.processEvents()
     def tearDown(self):
-        self.window.close();self.app.processEvents();self.temp.cleanup()
+        self.window.close();self.window.deleteLater();self.app.processEvents();self.temp.cleanup();super().tearDown()
     def settle(self):
         until=time.monotonic()+6
         while self.window.future and time.monotonic()<until:

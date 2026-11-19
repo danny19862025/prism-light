@@ -4,9 +4,10 @@ os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 import unittest
 from PySide6.QtWidgets import QApplication
 from prism.monitoring import SystemWidgets
+from qtsafe import QtTestCase
 
 
-class MonitoringTests(unittest.TestCase):
+class MonitoringTests(QtTestCase):
     @classmethod
     def setUpClass(cls):cls.app=QApplication.instance() or QApplication([])
 

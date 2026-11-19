@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from urllib.request import Request,urlopen
 import zipfile
 
@@ -31,7 +32,17 @@ def digest(path):
         for chunk in iter(lambda:f.read(1024*1024),b''):h.update(chunk)
     return h.hexdigest()
 
-def acquire(asset,cache):
+def acquire(asset,cache,attempts=3):
+    # codeberg.org sometimes stalls a response; retry transient network
+    # errors instead of failing the whole build on one slow read.
+    for attempt in range(1,attempts+1):
+        try:return download(asset,cache)
+        except (OSError,TimeoutError) as e:
+            if attempt==attempts:raise
+            print(f'Download of {asset[0]} failed ({e}); retrying {attempt}/{attempts-1}...',flush=True)
+            time.sleep(5*attempt)
+
+def download(asset,cache):
     name,url,expected=asset;path=cache/name
     if path.exists() and digest(path)==expected:return path
     cache.mkdir(parents=True,exist_ok=True);temp=path.with_suffix(path.suffix+'.part')
