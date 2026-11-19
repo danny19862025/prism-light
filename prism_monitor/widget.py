@@ -33,6 +33,10 @@ LEVELS = {'cpu_temp': (75, 88), 'gpu_temp': (75, 85), 'gpu_hotspot': (90, 100), 
 
 def level(key, item):
     """'warn', 'hot' or None for a fresh reading."""
+    if item is not None and key.startswith('bat:'):
+        if item.extra:   # charging or full: never a warning
+            return None
+        return 'hot' if item.value <= 10 else 'warn' if item.value <= 20 else None
     if item is None or key not in LEVELS:
         return None
     value = item.value
@@ -50,7 +54,14 @@ HINTS = {
     'fans': 'Motherboard fan speeds need the sensor helper (administrator) and the PawnIO driver.',
     'fps': 'No presenting game found. Focus the game, or pick its process in Settings → Game FPS.',
     'frametime': 'Frame time comes from the same PresentMon capture as FPS.',
+    'battery': 'No device is reporting a battery level right now. Shown automatically: PlayStation controllers '
+               '(USB or Bluetooth), Xbox controllers, a laptop battery, and Bluetooth keyboards, mice and headsets '
+               'that report their battery to Windows. Keyboards plugged in by cable, and devices on their own '
+               'wireless dongle, usually do not report one.',
 }
+
+BATTERY_SOURCES = {'usb': 'the controller (USB)', 'bluetooth': 'the controller (Bluetooth)',
+                   'windows': 'Windows Bluetooth', 'xinput': 'XInput', 'system': 'Windows power status'}
 
 
 SENSOR_SHORT = {'Core (Tctl/Tdie)': 'Tctl', 'CCDs Max (Tdie)': 'CCD max', 'CCDs Average (Tdie)': 'CCD avg',
@@ -165,6 +176,12 @@ class MonitorWidget(QWidget):
             return [(fid, label) for fid, (label, item) in fans if item.value > 0]
         return [(fid, label) for fid, (label, item) in fans if fid in chosen]
 
+    def visible_batteries(self):
+        if not self.snapshot or 'battery' not in self.settings['visible']:
+            return []
+        return sorted(((bid, name) for bid, (name, _, _) in self.snapshot.batteries.items()),
+                      key=lambda pair: (pair[1].casefold(), pair[0]))
+
     def update_snapshot(self, snap):
         self.snapshot = snap
         for key, item in snap.readings.items():
@@ -206,6 +223,10 @@ class MonitorWidget(QWidget):
             if group == 'fans':
                 fans = self.visible_fans()
                 specs.append((group, title, [], [('fan:' + fid, label) for fid, label in fans] or [('fans', 'Fans')]))
+                continue
+            if group == 'battery':
+                rows = [('bat:' + bid, name) for bid, name in self.visible_batteries()]
+                specs.append((group, title, [], rows or [('battery', 'Devices')]))
                 continue
             if group == 'clock':
                 specs.append((group, title, ['clock'], []))
@@ -398,6 +419,13 @@ class MonitorWidget(QWidget):
         if key.startswith('fan:') and snap:
             fan = snap.fans.get(key[4:])
             item = fan[1] if fan else None
+        if key.startswith('bat:') and snap:
+            battery = snap.batteries.get(key[4:])
+            item = battery[1] if battery else None
+            if battery and battery[2] and is_fresh(item, now, self.stale_after()):
+                return battery[2], True, item   # coarse level, e.g. Xbox "Medium"
+        if key == 'battery':
+            return ('none' if snap and snap.info.get('batteries_scanned') else '…'), False, None
         if item is None:
             return 'n/a', False, None
         if not is_fresh(item, now, self.stale_after()):
@@ -406,6 +434,11 @@ class MonitorWidget(QWidget):
 
     def hint(self, key, item, fresh):
         snap = self.snapshot
+        if fresh and key.startswith('bat:'):
+            state = {1.0: 'Charging', 2.0: 'Fully charged'}.get(item.extra, 'On battery')
+            return f'{state}\nSource: {BATTERY_SOURCES.get(item.source, item.source)}\nUpdates every 15 seconds.'
+        if key == 'battery' and not (snap and snap.info.get('batteries_scanned')):
+            return 'Looking for devices…'
         if fresh:
             src = {'lhm': 'LibreHardwareMonitor (sensor helper)', 'adl': 'AMD driver (ADL)', 'pdh': 'Windows performance counters',
                    'windows': 'Windows', 'presentmon': 'PresentMon'}.get(item.source, item.source)
@@ -482,8 +515,11 @@ class MonitorWidget(QWidget):
             text, fresh, item = self.value_text(key, now)
             p.setFont(self.mkfont(px * 0.82))
             p.setPen(theme['dim'])
-            label_w = QFontMetricsF(p.font()).horizontalAdvance(label) + 6 * s
-            p.drawText(cell, Qt.AlignLeft | Qt.AlignVCenter, label)
+            shown = label
+            if key.startswith('bat:'):   # device names can be long; keep room for the gauge and value
+                shown = QFontMetricsF(p.font()).elidedText(label, Qt.ElideRight, cell.width() * 0.5)
+            label_w = QFontMetricsF(p.font()).horizontalAdvance(shown) + 6 * s
+            p.drawText(cell, Qt.AlignLeft | Qt.AlignVCenter, shown)
             p.setFont(self.mkfont(px * 0.95, QFont.DemiBold if fresh else QFont.Normal))
             p.setPen(self.value_color(key, item, fresh, theme))
             if not fresh:
@@ -491,6 +527,17 @@ class MonitorWidget(QWidget):
                 f.setItalic(True)
                 p.setFont(f)
             value_rect = QRectF(cell.left() + label_w, cell.top(), cell.width() - label_w, cell.height())
+            if key.startswith('bat:') and fresh:
+                # Battery gauge between the name and the value.
+                glyph_w = px * 1.55
+                text_w = min(QFontMetricsF(p.font()).horizontalAdvance(text), value_rect.width() - glyph_w - 4 * s)
+                glyph = QRectF(value_rect.right() - text_w - 5 * s - glyph_w, cell.center().y() - px * 0.34,
+                               glyph_w, px * 0.68)
+                if glyph.left() > value_rect.left():
+                    lvl = level(key, item) if self.settings['color_levels'] else None
+                    self.paint_battery(p, glyph, item, theme[lvl] if lvl else accent, theme, s)
+                    value_rect.setLeft(glyph.right() + 4 * s)
+                p.setPen(self.value_color(key, item, fresh, theme))
             p.drawText(value_rect, Qt.AlignRight | Qt.AlignVCenter,
                        QFontMetricsF(p.font()).elidedText(text, Qt.ElideLeft, value_rect.width()))
             self.hits.append((cell, f'{label}: {text}\n' + self.hint(key, item, fresh)))
@@ -509,6 +556,35 @@ class MonitorWidget(QWidget):
             r = QRectF(inner.left(), cy, inner.width(), px * 1.3)
             p.drawText(r, Qt.AlignLeft | Qt.AlignVCenter, QFontMetricsF(p.font()).elidedText(line, Qt.ElideMiddle, r.width()))
             self.hits.append((r, 'FPS source process. Choose a specific game in Settings → Game FPS.'))
+
+    def paint_battery(self, p, rect, item, color, theme, s):
+        """A small battery: outline, fill to the charge level, and a bolt while charging."""
+        p.save()
+        body = rect.adjusted(0, 0, -2.2 * s, 0)
+        p.setPen(QPen(theme['dim'], max(1.0, 1.1 * s)))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(body, 2.2 * s, 2.2 * s)
+        p.setPen(Qt.NoPen)
+        p.setBrush(theme['dim'])
+        p.drawRoundedRect(QRectF(body.right() + 0.6 * s, rect.center().y() - rect.height() * 0.2,
+                                 1.6 * s, rect.height() * 0.4), 0.8 * s, 0.8 * s)
+        inner = body.adjusted(2 * s, 2 * s, -2 * s, -2 * s)
+        p.setBrush(color)
+        p.drawRoundedRect(QRectF(inner.left(), inner.top(), max(1.5 * s, inner.width() * min(1.0, item.value / 100)),
+                                 inner.height()), 1.2 * s, 1.2 * s)
+        if item.extra == 1.0:   # charging bolt
+            c, w, h = body.center(), body.height() * 0.42, body.height() * 0.72
+            bolt = QPainterPath(QPointF(c.x() + w * 0.25, c.y() - h / 2))
+            bolt.lineTo(c.x() - w * 0.45, c.y() + h * 0.08)
+            bolt.lineTo(c.x() - w * 0.02, c.y() + h * 0.08)
+            bolt.lineTo(c.x() - w * 0.25, c.y() + h / 2)
+            bolt.lineTo(c.x() + w * 0.45, c.y() - h * 0.08)
+            bolt.lineTo(c.x() + w * 0.02, c.y() - h * 0.08)
+            bolt.closeSubpath()
+            p.setPen(QPen(theme['bg'], max(1.0, 1.2 * s)))
+            p.setBrush(theme['text'])
+            p.drawPath(bolt)
+        p.restore()
 
     def paint_primary(self, p, key, cell, theme, accent, s, px, now):
         metric = BY_KEY[key]

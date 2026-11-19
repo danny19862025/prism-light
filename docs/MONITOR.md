@@ -64,8 +64,11 @@ Settings are saved to `%APPDATA%\PrismMonitor\settings.json`. **Launch at login*
 | Network up/down | PDH `Network Interface` (virtual/loopback adapters excluded) | No |
 | Disk active, read, write | PDH `PhysicalDisk(_Total)` | No |
 | Motherboard fans | LibreHardwareMonitor Super I/O (IT8696E on this board) | Yes |
+| Device batteries | PlayStation controllers (DualSense, DualSense Edge, DualShock 4) from their HID input report, USB or Bluetooth; Windows' Bluetooth battery property (keyboards, mice, headsets, as in **Settings → Bluetooth & devices**); Xbox controllers via XInput (Empty / Low / Medium / Full); a laptop or UPS battery via `GetSystemPowerStatus`. Scanned every 15 s, only while the card is shown | No |
 
 \* PresentMon needs administrator rights or membership of the Windows **Performance Log Users** group. Without either, the widget asks the running sensor helper to run PresentMon and relay its output.
+
+**Batteries.** The Batteries card lists every device that reports a level, with a gauge that turns amber at 20 % and red at 10 % (not while charging). A controller that is plugged in and still paired is listed once, by its Bluetooth address. A DualSense or DualShock 4 on Bluetooth starts in a basic mode that carries no battery level; reading its calibration report switches it to the full report, as Steam and the Linux driver do. To leave Bluetooth controllers untouched, set `"battery_wake_bt": false` in `settings.json`. Keyboards on a cable, and devices on their own wireless dongle (Logitech Lightspeed, Razer HyperSpeed, Corsair Slipstream), usually do not report a level to Windows and are not shown.
 
 **Which CPU temperature?** Ryzen 9000 CPUs report several temperatures. Tctl/Tdie is AMD's control temperature: Ryzen Master, HWiNFO and the BIOS show it as "CPU temperature", and the cooler responds to it. The CCD values are the individual core dies, and an idle die can read 30 °C cooler than Tctl. On the test PC, Tctl and the motherboard's CPU socket sensor both read 68 °C while CCD2 read 37 °C. The CPU tile shows which sensor it uses (for example "Temp · Tctl"), and hovering it lists them all.
 

@@ -14,7 +14,7 @@ class Reading:
     value: float
     ts: float                      # time.monotonic() when measured
     source: str = ''
-    extra: float = None            # e.g. total for used/total metrics
+    extra: float = None            # e.g. total for used/total metrics; battery: 1 charging, 2 full
 
 
 def reading(value, source, extra=None, now=None):
@@ -43,7 +43,7 @@ class Metric:
 
 # Groups in display order: (id, title)
 GROUPS = (('cpu', 'CPU'), ('gpu', 'GPU'), ('ram', 'Memory'), ('fps', 'Game'), ('net', 'Network'),
-          ('disk', 'Disk'), ('fans', 'Fans'), ('clock', 'Time'))
+          ('disk', 'Disk'), ('fans', 'Fans'), ('battery', 'Batteries'), ('clock', 'Time'))
 
 METRICS = (
     Metric('cpu_temp', 'cpu', 'Temp', '°C', True, 100),
@@ -66,6 +66,7 @@ METRICS = (
     Metric('disk_read', 'disk', 'Read', 'B/s', default=False),
     Metric('disk_write', 'disk', 'Write', 'B/s', default=False),
     Metric('fans', 'fans', 'Fans', 'rpm', default=False),
+    Metric('battery', 'battery', 'Devices', '%'),
     Metric('clock', 'clock', 'Clock', '', default=False),
 )
 BY_KEY = {m.key: m for m in METRICS}
@@ -109,6 +110,8 @@ def format_value(key, item):
         return f'{v:.1f} ms'
     if key in ('net_down', 'net_up', 'disk_read', 'disk_write'):
         return fmt_rate(v)
+    if key.startswith('bat:'):
+        return f'{v:.0f}%'
     if key in ('gpu_fan',) or key.startswith('fan:'):
         return f'{v:.0f} rpm'
     return f'{v:g}'
@@ -118,5 +121,6 @@ def format_value(key, item):
 class Snapshot:
     readings: dict = field(default_factory=dict)   # key -> Reading
     fans: dict = field(default_factory=dict)       # fan id -> (label, Reading)
+    batteries: dict = field(default_factory=dict)  # device id -> (name, Reading, coarse level text)
     info: dict = field(default_factory=dict)       # device names, fps app name, etc.
     status: dict = field(default_factory=dict)     # source -> human-readable status

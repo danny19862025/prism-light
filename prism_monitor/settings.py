@@ -5,7 +5,11 @@ import os
 import sys
 from pathlib import Path
 
-from .model import BY_KEY, DEFAULT_VISIBLE
+from .model import BY_KEY, DEFAULT_VISIBLE, METRICS
+
+# Metrics that existed before 'known_metrics' was stored. A default-on metric added later is
+# switched on once for existing users instead of staying hidden behind an old 'visible' list.
+LEGACY_METRICS = tuple(m.key for m in METRICS if m.key != 'battery')
 
 DEFAULTS = {
     'theme': 'dark',                 # dark | midnight | light
@@ -19,6 +23,8 @@ DEFAULTS = {
     'color_levels': True,            # tint hot temperatures / near-full memory amber and red
     'history': 60,                   # samples kept per graph
     'visible': list(DEFAULT_VISIBLE),
+    'known_metrics': [m.key for m in METRICS],
+    'battery_wake_bt': True,         # switch Bluetooth PlayStation controllers to the report that carries battery
     'fans_visible': None,            # None = fans reporting > 0 rpm when first seen
     'interval': 1.0,                 # seconds
     'always_on_top': True,
@@ -75,6 +81,11 @@ def validate(data):
     out['history'] = _clamp(out['history'], 10, 300, 60)
     out['interval'] = _clamp(out['interval'], 0.25, 10.0, 1.0)
     out['visible'] = [k for k in out['visible'] if k in BY_KEY] if isinstance(out['visible'], list) else list(DEFAULT_VISIBLE)
+    known = data.get('known_metrics') if isinstance(data.get('known_metrics'), list) else LEGACY_METRICS
+    for metric in METRICS:
+        if metric.default and metric.key not in known and metric.key not in out['visible']:
+            out['visible'].append(metric.key)
+    out['known_metrics'] = [m.key for m in METRICS]
     if out['fans_visible'] is not None and not isinstance(out['fans_visible'], list):
         out['fans_visible'] = None
     pos = out['position']
@@ -88,7 +99,7 @@ def validate(data):
     out['awake_folder'] = str(out['awake_folder'] or '')[:1024]
     apps = out['awake_auto_apps']
     out['awake_auto_apps'] = [str(a)[:260] for a in apps if a][:50] if isinstance(apps, list) else []
-    for key in ('graphs', 'header', 'color_levels', 'awake_display', 'always_on_top', 'locked', 'click_through', 'launch_at_login', 'helper_autostart', 'helper_task',
+    for key in ('graphs', 'header', 'color_levels', 'awake_display', 'always_on_top', 'locked', 'click_through', 'launch_at_login', 'helper_autostart', 'helper_task', 'battery_wake_bt',
                 'setup_hint_shown', 'shown'):
         out[key] = bool(out[key])
     return out

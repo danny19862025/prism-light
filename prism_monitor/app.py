@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from . import autostart
 from .awake import AFTER, KeepAwake
 from .awake_ui import AwakeMenu, CountdownDialog
+from .batteries import BatteryMonitor, scan as scan_batteries
 from .collector import Collector
 from .fps import FrameTracker, LocalPresentMon
 from .host import HostClient, vendor_dir
@@ -54,6 +55,8 @@ class PrismMonitor:
         self.collector = Collector(self.host, self.tracker, settings['interval'])
         self.collector.fps_target = settings['fps_process']
         self.collector.cpu_temp_sensor = settings['cpu_temp_sensor']
+        self.batteries = BatteryMonitor(scanner=lambda: scan_batteries(self.settings['battery_wake_bt']))
+        self.collector.batteries = self.batteries
         self.presentmon = LocalPresentMon(vendor_dir() / 'presentmon' / 'PresentMon.exe', self.tracker)
         self.fps_mode = 'local'
         self.fps_retry_at = 0.0
@@ -95,6 +98,7 @@ class PrismMonitor:
         if settings['shown'] and not start_hidden:
             self.widget.show()
         self.collector.start()
+        self.supervise_batteries()
         self.supervise_fps()
         self.fps_timer.start()
         self.hint_pending = False
@@ -314,6 +318,7 @@ class PrismMonitor:
             self.widget.signature = None
         elif key == 'visible':
             self.supervise_fps()
+            self.supervise_batteries()
         self.widget.signature = None
         self.widget.relayout()
         if key == 'orientation':
@@ -450,10 +455,18 @@ class PrismMonitor:
         if not self.presentmon.start():
             self.collector.fps_note = self.presentmon.error
 
+    def supervise_batteries(self):
+        """Scan device batteries only while the Batteries card is shown."""
+        if 'battery' in self.settings['visible']:
+            self.batteries.start()
+        else:
+            self.batteries.stop()
+
     def shutdown(self):
         self.closing = True
         self.awake.shutdown()
         self.fps_timer.stop()
+        self.batteries.stop()
         self.collector.stop()
         self.presentmon.stop()
         self.host.stop()

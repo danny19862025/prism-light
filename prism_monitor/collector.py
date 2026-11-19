@@ -24,6 +24,7 @@ class Collector(QObject):
         self.interval = interval
         self.fps_target = ''
         self.cpu_temp_sensor = ''   # '' = automatic (Tctl/Tdie)
+        self.batteries = None       # BatteryMonitor, scanning only while the Batteries card is shown
         self.fps_note = 'FPS capture is off.'
         self.stop_flag = threading.Event()
         self.wake = threading.Event()
@@ -96,6 +97,7 @@ class Collector(QObject):
                 snap.info['fps_app'] = app
                 snap.status['fps'] = self.fps_note
                 snap.status['helper'] = self.host.detail
+                self._add_batteries(snap)
                 self.snapshot.emit(snap)
                 elapsed = time.monotonic() - started
                 self.wake.wait(max(0.05, self.interval - elapsed))
@@ -107,6 +109,18 @@ class Collector(QObject):
                         source.close()
                     except Exception:
                         pass
+
+    def _add_batteries(self, snap):
+        monitor = self.batteries
+        if monitor is None or not monitor.running:
+            return
+        items, status, scanned_at = monitor.latest()
+        snap.info['batteries_scanned'] = bool(scanned_at)
+        snap.status['batteries'] = ', '.join(f'{k}: {v}' for k, v in status.items())
+        now = time.monotonic()   # a scan stays current until the next one replaces it
+        for b in items:
+            extra = {'charging': 1.0, 'full': 2.0}.get(b.state, 0.0)
+            snap.batteries[b.id] = (b.name, Reading(b.percent, now, b.source, extra), b.text)
 
     def stop(self):
         self.stop_flag.set()

@@ -150,7 +150,9 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(data['scale'], 2.0)
         self.assertEqual(data['opacity'], 0.2)
         self.assertEqual(data['theme'], 'dark')
-        self.assertEqual(data['visible'], ['cpu_temp'])
+        self.assertEqual(data['visible'], ['cpu_temp', 'battery'])   # new default-on card added once
+        self.assertEqual(validate({'visible': ['cpu_temp'], 'known_metrics': data['known_metrics']})['visible'],
+                         ['cpu_temp'])                               # and stays off once the user hides it
         self.assertIsNone(data['position'])
         self.assertEqual(data['accent'], DEFAULTS['accent'])
         self.assertFalse(validate({})['launch_at_login'])
@@ -407,6 +409,104 @@ class KeepAwakeTests(unittest.TestCase):
         window.update_awake()
         self.assertIn('5:00 left', window.awake_status.text())
         window.close()
+
+
+
+class BatteryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_dualsense_reports(self):
+        from prism_monitor.batteries import SIMPLE_MODE, parse_sony_report
+        usb = bytearray(64)
+        usb[0], usb[53] = 0x01, 0x13          # charging, capacity 3
+        self.assertEqual(parse_sony_report('ds', False, bytes(usb)), (35.0, 'charging'))
+        bt = bytearray(78)
+        bt[0], bt[54] = 0x31, 0x0A            # on battery, capacity 10
+        self.assertEqual(parse_sony_report('ds', True, bytes(bt)), (100.0, ''))
+        bt[54] = 0x2A
+        self.assertEqual(parse_sony_report('ds', True, bytes(bt)), (100.0, 'full'))
+        self.assertEqual(parse_sony_report('ds', True, bytes([0x01] + [0] * 9)), SIMPLE_MODE)
+        self.assertIsNone(parse_sony_report('ds', False, bytes([0x05, 1, 2])))   # unrelated report
+
+    def test_dualshock4_reports(self):
+        from prism_monitor.batteries import parse_sony_report
+        usb = bytearray(64)
+        usb[0], usb[30] = 0x01, 0x1B          # cable, capacity 11 = full
+        self.assertEqual(parse_sony_report('ds4', False, bytes(usb)), (100.0, 'full'))
+        bt = bytearray(78)
+        bt[0], bt[32] = 0x11, 0x04
+        self.assertEqual(parse_sony_report('ds4', True, bytes(bt)), (45.0, ''))
+
+    def test_controller_paths(self):
+        from prism_monitor.batteries import sony_model
+        self.assertEqual(sony_model(r'\?\HID#VID_054C&PID_0CE6&MI_03#8&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}'),
+                         ('DualSense', 'ds', False))
+        self.assertEqual(sony_model(r'\?\HID#{00001124-0000-1000-8000-00805f9b34fb}_VID&0002054c_PID&0ce6#b&1#{x}'),
+                         ('DualSense', 'ds', True))
+        self.assertIsNone(sony_model(r'\?\HID#VID_1532&PID_0099&MI_00#a&1#{x}'))
+
+    def test_merge_prefers_direct_reading_and_numbers_twins(self):
+        from prism_monitor.batteries import Battery, merge
+        merged = merge([Battery('sony:a', 'DualSense', 40, source='usb'),
+                        Battery('win:a', 'dualsense', 50, source='windows'),
+                        Battery('sony:b', 'DualSense', 80, source='bluetooth'),
+                        Battery('win:k', 'K2 Keyboard', 70, source='windows')])
+        self.assertEqual([(b.name, b.percent) for b in merged],
+                         [('DualSense 1', 40), ('DualSense 2', 80), ('K2 Keyboard', 70)])
+
+    def test_monitor_restart_runs_one_scanner(self):
+        import threading
+        import time
+        from prism_monitor.batteries import Battery, BatteryMonitor
+        calls = []
+        running = threading.Semaphore(0)
+
+        def scanner():
+            calls.append(threading.get_ident())
+            running.release()
+            return [Battery('x', 'Pad', 50)], {'fake': 'OK'}
+        monitor = BatteryMonitor(interval=0.05, scanner=scanner)
+        monitor.start()
+        running.acquire(timeout=2)
+        monitor.stop()
+        monitor.start()
+        time.sleep(0.3)
+        monitor.stop()
+        time.sleep(0.1)
+        self.assertLessEqual(len(set(calls)), 2)
+        self.assertEqual(monitor.latest()[0], [])          # stopped: nothing stale left behind
+
+    def test_card_rows_colours_and_tooltips(self):
+        import time
+        from prism_monitor.widget import MonitorWidget, level
+        with tempfile.TemporaryDirectory() as d:
+            settings = Settings(Path(d) / 's.json')
+            self.assertIn('battery', settings['visible'])
+            w = MonitorWidget(settings)
+            now = time.monotonic()
+            w.update_snapshot(Snapshot(info={'batteries_scanned': False}))
+            card = next(c for c in w.cards if c['group'] == 'battery')
+            self.assertEqual(card['secondary'], [('battery', 'Devices')])
+            self.assertEqual(w.value_text('battery', now)[0], '…')
+            snap = Snapshot(info={'batteries_scanned': True}, batteries={
+                'pad': ('DualSense', Reading(15, now, 'usb', 1.0), ''),
+                'kb': ('Keychron K2 Bluetooth Keyboard', Reading(8, now, 'windows', 0.0), ''),
+                'xbox': ('Xbox controller 1', Reading(60, now, 'xinput', 0.0), 'Medium')})
+            w.update_snapshot(snap)
+            card = next(c for c in w.cards if c['group'] == 'battery')
+            self.assertEqual([k for k, _ in card['secondary']], ['bat:pad', 'bat:kb', 'bat:xbox'])
+            self.assertEqual(w.value_text('bat:pad', now)[0], '15%')
+            self.assertEqual(w.value_text('bat:xbox', now)[0], 'Medium')
+            self.assertIsNone(level('bat:pad', snap.batteries['pad'][1]))      # charging: no warning
+            self.assertEqual(level('bat:kb', snap.batteries['kb'][1]), 'hot')
+            w.grab()
+            tips = [text for _, text in w.hits if text.startswith('DualSense')]
+            self.assertTrue(tips and 'Charging' in tips[0])
+            w.update_snapshot(Snapshot(info={'batteries_scanned': True}))
+            self.assertEqual(w.value_text('battery', now)[0], 'none')
 
 
 if __name__ == '__main__':
