@@ -45,6 +45,10 @@ The folder build preserves shared Qt libraries and includes the project's licens
 
 `vendor/pawnio-modules/AMDFamily17.bin`, unmodified signed module from https://github.com/namazso/PawnIO.Modules/releases/tag/0.2.11 (release ZIP SHA-256 43608cb89bc84247fef1368a139013f7d043e17db6d6c8dfc9b46bf0905a81f4). LGPL-2.1: `licenses/PawnIO-Modules-LGPL-2.1.txt`. Used read-only (SMN 0x59800).
 
+## Barlow font (Prism Monitor Poster look)
+
+`prism_monitor/fonts/Barlow-{Regular,SemiBold,Bold}.ttf`, unmodified, from https://github.com/jpt/barlow. Copyright 2017 The Barlow Project Authors. SIL Open Font License 1.1: `prism_monitor/fonts/OFL-barlow.txt`, shipped beside the fonts in the Prism Monitor bundle.
+
 ## Reference implementations (no code copied)
 
 Protocol and register details were taken from OpenLinkHub (GPL-3.0, Nautilus LCD), LibreHardwareMonitor (MPL-2.0, ITE fan registers, Ryzen Tctl) and AMD's ADL SDK headers (MIT, GPU sensor IDs).

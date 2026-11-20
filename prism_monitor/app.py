@@ -129,7 +129,17 @@ class PrismMonitor:
         self.act_lock = self.check_action('Lock position', 'locked')
         self.act_click = self.check_action('Click-through', 'click_through')
         self.act_top = self.check_action('Always on top', 'always_on_top')
-        layout = menu.addMenu('Layout')
+        look = menu.addMenu('Look')
+        look_group = QActionGroup(look)
+        self.act_style = {}
+        for value, text in (('poster', 'Poster'), ('card', 'Card')):
+            action = QAction(text, look, checkable=True)
+            action.setChecked(self.settings['style'] == value)
+            action.triggered.connect(lambda _=False, v=value: self.set_layout(v, 'style'))
+            look_group.addAction(action)
+            look.addAction(action)
+            self.act_style[value] = action
+        layout = self.layout_menu = menu.addMenu('Layout')
         group = QActionGroup(layout)
         self.act_layout = {}
         for value, text in (('horizontal', 'Horizontal strip'), ('vertical', 'Vertical stand')):
@@ -166,6 +176,9 @@ class PrismMonitor:
             action.blockSignals(False)
         for value, action in self.act_layout.items():
             action.setChecked(self.settings['orientation'] == value)
+        for value, action in self.act_style.items():
+            action.setChecked(self.settings['style'] == value)
+        self.layout_menu.setEnabled(self.settings['style'] == 'card')
         connected = self.host.state in ('connected', 'starting')
         automatic = self.settings['helper_task']
         self.act_helper.setText('Stop sensor helper' if connected else
@@ -177,9 +190,10 @@ class PrismMonitor:
         self.act_setup.setVisible(not automatic or status != 'ready')
         self.act_setup.setEnabled(self.host.state != 'setup')
 
-    def set_layout(self, orientation):
-        """Switch between the horizontal strip and the vertical stand (from the menu)."""
-        self.set_and_apply('orientation', orientation)
+    def set_layout(self, value, key='orientation'):
+        """Switch between the horizontal strip and the vertical stand, or between the
+        Poster and Card looks (from the menu)."""
+        self.set_and_apply(key, value)
 
     def keep_anchor(self, old):
         """After a layout switch, keep the widget flush with the screen side it was on."""
@@ -321,7 +335,7 @@ class PrismMonitor:
             self.supervise_batteries()
         self.widget.signature = None
         self.widget.relayout()
-        if key == 'orientation':
+        if key in ('orientation', 'style'):
             self.keep_anchor(old)
         self.widget.update()
         self.save_timer.start()

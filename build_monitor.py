@@ -37,6 +37,8 @@ argv = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir
         '--workpath', str(root / 'build' / 'monitor'), '--specpath', str(root / 'build')]
 for module in excluded:
     argv += ['--exclude-module', module]
+# Barlow, for the Poster look (prism_monitor/poster.py loads it from beside the module).
+argv += ['--add-data', f"{root / 'prism_monitor' / 'fonts'}{os.pathsep}prism_monitor/fonts"]
 subprocess.run(argv + [str(root / 'monitor_main.py')], cwd=root, check=True)
 
 bundle = root / 'dist' / 'PrismMonitor'

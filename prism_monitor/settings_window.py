@@ -130,6 +130,21 @@ class SettingsWindow(QWidget):
         self.accent_button.clicked.connect(self.pick_accent)
         self.paint_accent()
         form.addRow('Accent colour', self.accent_button)
+        self.style_combo = style = QComboBox()
+        style.addItem('Poster (no panel, like the Still clock)', 'poster')
+        style.addItem('Card (dark panel with graphs)', 'card')
+        style.setToolTip('Also in the widget and tray right-click menu: Look.')
+        style.setCurrentIndex(max(0, style.findData(self.settings['style'])))
+        style.currentIndexChanged.connect(lambda: (self.set('style', style.currentData()), self.sync_style()))
+        form.addRow('Look', style)
+        self.hero_combo = hero = QComboBox()
+        hero.addItem('CPU temperature', 'cpu')
+        hero.addItem('GPU temperature', 'gpu')
+        hero.setToolTip('The big number in the Poster look. While a game is running it shows FPS instead.')
+        hero.setCurrentIndex(max(0, hero.findData(self.settings['poster_hero'])))
+        hero.currentIndexChanged.connect(lambda: self.set('poster_hero', hero.currentData()))
+        form.addRow('Big number', hero)
+        self.card_only = []
         self.orientation = orientation = QComboBox()
         orientation.addItem('Horizontal strip', 'horizontal')
         orientation.addItem('Vertical stand', 'vertical')
@@ -140,16 +155,19 @@ class SettingsWindow(QWidget):
         font = QSpinBox(minimum=7, maximum=20, suffix=' pt', value=self.settings['font_size'])
         font.valueChanged.connect(lambda v: self.set('font_size', v))
         form.addRow('Font size', font)
-        form.addRow('Background opacity', self.slider(20, 100, round(self.settings['opacity'] * 100), '%',
-                                                     lambda v: self.set('opacity', v / 100)))
+        opacity = self.slider(20, 100, round(self.settings['opacity'] * 100), '%', lambda v: self.set('opacity', v / 100))
+        form.addRow('Background opacity', opacity)
         form.addRow('Widget scale', self.slider(60, 200, round(self.settings['scale'] * 100), '%',
                                                 lambda v: self.set('scale', v / 100)))
+        self.card_only += [orientation, opacity]
         for key, text in (('header', 'Show the title bar (clock and keep-awake button)'),
                           ('color_levels', 'Colour hot temperatures and near-full memory amber/red')):
             check = QCheckBox(text)
             check.setChecked(self.settings[key])
             check.toggled.connect(lambda v, k=key: self.set(k, v))
             form.addRow(check)
+            if key == 'header':
+                self.card_only.append(check)
         graphs = QCheckBox('Show history graphs')
         graphs.setChecked(self.settings['graphs'])
         graphs.toggled.connect(lambda v: self.set('graphs', v))
@@ -157,7 +175,16 @@ class SettingsWindow(QWidget):
         history = QSpinBox(minimum=10, maximum=300, suffix=' samples', value=self.settings['history'])
         history.valueChanged.connect(lambda v: self.set('history', v))
         form.addRow('Graph length', history)
+        self.card_only += [graphs, history]
+        self.sync_style()
         return w
+
+    def sync_style(self):
+        """Card-only options are greyed out in the Poster look; the big-number choice is Poster-only."""
+        poster = self.settings['style'] == 'poster'
+        for widget in self.card_only:
+            widget.setEnabled(not poster)
+        self.hero_combo.setEnabled(poster)
 
     def slider(self, low, high, value, suffix, apply):
         box = QWidget()
@@ -264,6 +291,10 @@ class SettingsWindow(QWidget):
         self.orientation.blockSignals(True)
         self.orientation.setCurrentIndex(self.orientation.findData(self.settings['orientation']))
         self.orientation.blockSignals(False)
+        self.style_combo.blockSignals(True)
+        self.style_combo.setCurrentIndex(self.style_combo.findData(self.settings['style']))
+        self.style_combo.blockSignals(False)
+        self.sync_style()
 
     def fps_tab(self):
         w = QWidget()

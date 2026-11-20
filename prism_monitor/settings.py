@@ -17,7 +17,9 @@ DEFAULTS = {
     'font_size': 10,                 # pt, base text size
     'opacity': 0.82,                 # background opacity 0.2–1.0
     'scale': 1.0,                    # 0.6–2.0
-    'orientation': 'horizontal',     # horizontal | vertical
+    'style': 'poster',               # poster (no panel, like the Still clock) | card
+    'poster_hero': 'cpu',            # big number in the Poster look when no game runs: cpu | gpu
+    'orientation': 'horizontal',     # horizontal | vertical (Card look)
     'graphs': True,
     'header': True,                  # title bar with clock and keep-awake button
     'color_levels': True,            # tint hot temperatures / near-full memory amber and red
@@ -77,6 +79,9 @@ def validate(data):
     out['font_size'] = _clamp(out['font_size'], 7, 20, 10)
     out['opacity'] = _clamp(out['opacity'], 0.2, 1.0, 0.82)
     out['scale'] = _clamp(out['scale'], 0.6, 2.0, 1.0)
+    # Settings saved before the Poster look existed keep the Card look they had.
+    out['style'] = out['style'] if 'style' in data and out['style'] in ('poster', 'card') else 'card'
+    out['poster_hero'] = out['poster_hero'] if out['poster_hero'] in ('cpu', 'gpu') else 'cpu'
     out['orientation'] = out['orientation'] if out['orientation'] in ('horizontal', 'vertical') else 'horizontal'
     out['history'] = _clamp(out['history'], 10, 300, 60)
     out['interval'] = _clamp(out['interval'], 0.25, 10.0, 1.0)

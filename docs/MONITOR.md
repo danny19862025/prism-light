@@ -25,7 +25,9 @@ From source: `.venv\Scripts\python monitor_main.py`. Build the release with `.ve
 | Click-through | Clicks pass through the widget to the windows beneath it. Turn it off from the **tray icon menu**, which stays clickable. |
 | Lost widget | Choose **Reset widget position** from the tray menu. If a monitor is unplugged or rearranged, the widget also moves itself back onto a visible screen. |
 
-The title bar at the top of the widget shows the time and a **Keep awake** button (turn it off under **Settings → Appearance**). Temperatures, loads and memory turn amber, then red, as they approach their limits. Themes: Dark, Midnight and Light.
+**Look.** New installs start in the **Poster** look, which matches the Still desktop clock: no panel, bold Barlow lettering with a soft shadow so it reads on any wallpaper, a large faded accent number (CPU or GPU temperature, chosen under **Settings → Appearance → Big number**; FPS while a game runs) with a vertical caption, then compact rows for system, network, disk, fans and batteries. Readings that are not available are left out instead of shown as n/a; hover a row for its source. The widget keeps its width while numbers change and only resizes when rows appear or disappear. Size follows **Widget scale** and **Font size**. **Card** is the earlier dark panel with history graphs, horizontal strip or vertical stand; settings saved before the Poster look existed keep Card. Switch with **Look** in the right-click menu or **Settings → Appearance**.
+
+In the Card look, the title bar at the top of the widget shows the time and a **Keep awake** button (turn it off under **Settings → Appearance**). In the Poster look, Keep awake is in the right-click and tray menu. Temperatures, loads and memory turn amber, then red, as they approach their limits. Themes: Dark, Midnight and Light.
 
 ### Keep awake (like `caffeinate` on a Mac)
 

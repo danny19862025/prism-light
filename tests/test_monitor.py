@@ -158,6 +158,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(data['accent'], DEFAULTS['accent'])
         self.assertFalse(validate({})['launch_at_login'])
 
+    def test_poster_is_the_default_but_saved_settings_keep_card(self):
+        self.assertEqual(DEFAULTS['style'], 'poster')
+        self.assertEqual(validate({'theme': 'midnight'})['style'], 'card')   # saved before Poster existed
+        self.assertEqual(validate({'style': 'poster', 'poster_hero': 'x'})['poster_hero'], 'cpu')
+        self.assertEqual(validate({'style': 'bogus'})['style'], 'card')
+
     def test_round_trip_and_corrupt_file(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'settings.json'
@@ -182,6 +188,7 @@ class WidgetTests(QtTestCase):
         from prism_monitor.widget import MonitorWidget
         with tempfile.TemporaryDirectory() as d:
             settings = Settings(Path(d) / 's.json')
+            settings['style'] = 'card'
             w = MonitorWidget(settings)
             now = time.monotonic()
             snap = Snapshot(readings={'gpu_temp': Reading(42, now, 'adl'), 'cpu_util': Reading(10, now - 60, 'pdh')})
@@ -200,6 +207,7 @@ class WidgetTests(QtTestCase):
         with tempfile.TemporaryDirectory() as d:
             settings = Settings(Path(d) / 's.json')
             settings['orientation'] = 'vertical'
+            settings['style'] = 'card'
             w = MonitorWidget(settings)
             for active, headline in ((False, 'Off'), (True, '1:23:45 left'),
                                      (True, '↓ 12.5 MB/s · 3 files downloading')):
@@ -256,6 +264,87 @@ class WidgetTests(QtTestCase):
             self.assertIn('Status: OK', window.fps_status.text())
             self.assertTrue(window.auto_label.text().startswith('Automatic helper:'))
             window.close()
+
+
+class PosterTests(QtTestCase):
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def snapshot(self, now, cpu_temp=63, fan=980, fps=None):
+        readings = {'cpu_temp': Reading(cpu_temp, now, 'lhm'), 'cpu_util': Reading(35, now, 'pdh'),
+                    'gpu_temp': Reading(70, now, 'adl'), 'gpu_util': Reading(92, now, 'adl'),
+                    'ram_used': Reading(9.4 * (1 << 30), now, 'windows', 32 * (1 << 30))}
+        if fps:
+            readings['fps'] = Reading(fps, now, 'presentmon')
+            readings['frametime'] = Reading(1000 / fps, now, 'presentmon')
+        return Snapshot(readings=readings, fans={'f1': ('CPU fan', Reading(fan, now, 'lhm'))},
+                        batteries={'pad': ('DualSense', Reading(35, now, 'usb', 0.0), '')},
+                        info={'batteries_scanned': True, 'fps_app': 'Game.exe' if fps else None})
+
+    def widget(self, d):
+        from prism_monitor.widget import MonitorWidget
+        settings = Settings(Path(d) / 's.json')
+        settings['visible'] = settings['visible'] + ['fans']
+        settings['fans_visible'] = ['f1']
+        return MonitorWidget(settings)
+
+    def test_hero_rows_and_tooltips(self):
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            w = self.widget(d)
+            self.assertTrue(w.is_poster())
+            now = time.monotonic()
+            w.update_snapshot(self.snapshot(now))
+            c = w.poster
+            self.assertEqual((c.number, c.unit, c.headline, c.caption), ('63', '°C', 'CPU', 'MONITOR'))
+            self.assertEqual(c.subline, '35% LOAD')
+            self.assertEqual([g.caption for g in c.groups], ['SYSTEM', 'FANS', 'BATTERIES'])
+            system = {r.label: r for r in c.groups[0].rows}
+            self.assertEqual(system['GPU'].value, '92% · 70°C')
+            self.assertIsNotNone(system['GPU'].color)                     # 92% load is a warning
+            self.assertNotIn('CPU', system)                                # the hero already shows it
+            self.assertAlmostEqual(c.groups[2].rows[0].level, 0.35)
+            w.grab()
+            self.assertIsNone(w.pill_rect)
+            self.assertTrue(any(text.startswith('DualSense') for _, text in w.hits))
+            w.settings['poster_hero'] = 'gpu'
+            w.relayout()
+            self.assertEqual((w.poster.number, w.poster.headline), ('70', 'GPU'))
+
+    def test_fps_takes_the_hero_while_gaming(self):
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            w = self.widget(d)
+            w.update_snapshot(self.snapshot(time.monotonic(), fps=142))
+            self.assertEqual((w.poster.number, w.poster.headline, w.poster.caption), ('142', 'FPS', 'GAMING'))
+            self.assertEqual(w.poster.subline, 'GAME  ·  7.0 MS')
+            w.grab()
+
+    def test_width_steady_while_values_change(self):
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            w = self.widget(d)
+            now = time.monotonic()
+            w.update_snapshot(self.snapshot(now, cpu_temp=63, fan=1411))
+            size = w.size()
+            for temp, fan in ((41, 980), (88, 1111), (9, 800)):
+                w.update_snapshot(self.snapshot(now, cpu_temp=temp, fan=fan))
+                self.assertEqual(w.size(), size, (temp, fan))              # never shrinks or jumps
+            w.settings['visible'] = [k for k in w.settings['visible'] if k != 'battery']
+            w.relayout()
+            self.assertLess(w.height(), size.height())                     # rows removed: may shrink
+
+    def test_switching_back_to_card(self):
+        with tempfile.TemporaryDirectory() as d:
+            w = self.widget(d)
+            w.grab()
+            w.settings['style'] = 'card'
+            w.relayout()
+            self.assertIsNone(w.poster)
+            self.assertTrue(w.cards)
+            w.grab()
 
 
 class FakePower:
@@ -397,6 +486,7 @@ class KeepAwakeTests(QtTestCase):
         from prism_monitor.settings_window import SettingsWindow
         from prism_monitor.widget import MonitorWidget
         e = self.make()
+        e.settings['style'] = 'card'
         w = MonitorWidget(e.settings)
         w.set_awake(True, '1:00:00 left', 'tip')
         w.grab()
@@ -486,6 +576,7 @@ class BatteryTests(QtTestCase):
         with tempfile.TemporaryDirectory() as d:
             settings = Settings(Path(d) / 's.json')
             self.assertIn('battery', settings['visible'])
+            settings['style'] = 'card'
             w = MonitorWidget(settings)
             now = time.monotonic()
             w.update_snapshot(Snapshot(info={'batteries_scanned': False}))

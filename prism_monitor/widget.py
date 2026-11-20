@@ -12,6 +12,7 @@ from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
 
+from . import poster as P
 from .model import BY_KEY, GROUPS, METRICS, format_value, is_fresh
 
 THEMES = {
@@ -99,6 +100,8 @@ class MonitorWidget(QWidget):
         self.header_rect = None
         self.pill_rect = None
         self.awake = (False, 'Off', '')     # active, headline, tooltip
+        self.poster = None                  # P.Content while the Poster look is on
+        self.poster_floor = None            # Poster size never shrinks until the rows change
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setMouseTracking(True)
@@ -236,9 +239,16 @@ class MonitorWidget(QWidget):
             specs.append((group, title, primary, secondary))
         return specs
 
+    def is_poster(self):
+        return self.settings['style'] == 'poster'
+
     def relayout(self):
+        if self.is_poster():
+            self.relayout_poster()
+            return
+        self.poster = None
         specs = self.card_specs()
-        signature = (tuple((g, tuple(p), tuple(sec)) for g, _, p, sec in specs),
+        signature = ('card', tuple((g, tuple(p), tuple(sec)) for g, _, p, sec in specs),
                      self.settings['orientation'], self.settings['scale'], self.settings['font_size'],
                      self.settings['graphs'], self.settings['history'], self.settings['header'])
         if signature == self.signature:
@@ -282,8 +292,155 @@ class MonitorWidget(QWidget):
         self.header_rect = QRectF(pad, pad, width - 2 * pad, header_h) if header_h else None
         self.setFixedSize(round(width), round(height))
 
+    # -- poster look -------------------------------------------------------
+    def poster_scale(self):
+        return self.settings['scale'] * self.settings['font_size'] / 10
+
+    def relayout_poster(self):
+        content = self.poster_content(time.monotonic())
+        rows = tuple((g.caption, tuple(r.key for r in g.rows)) for g in content.groups)
+        signature = ('poster', rows, content.caption, content.headline, self.settings['scale'],
+                     self.settings['font_size'], self.settings['theme'])
+        if signature != self.signature:
+            self.signature = signature
+            self.poster_floor = None     # rows changed: allowed to shrink once
+            self.cards, self.header_rect, self.pill_rect = [], None, None
+        self.poster = content
+        ink = P.ink_for(self.settings['theme'], self.settings['accent'])
+        size, _ = P.paint(None, content, self.poster_scale(), ink, self.poster_floor)
+        self.poster_floor = size
+        if size != self.size():
+            self.setFixedSize(size)
+
+    def poster_color(self, key, item):
+        """Warning colour for a value, or None for the normal lettering colour."""
+        lvl = level(key, item) if self.settings['color_levels'] else None
+        if not lvl:
+            return None
+        if self.settings['theme'] == 'light':
+            return THEMES['light'][lvl]
+        return QColor('#ffd166') if lvl == 'warn' else QColor('#ff7a7a')
+
+    def poster_content(self, now):
+        """The Poster's hero number and rows, from the same readings the cards use."""
+        P.load_fonts()
+        visible = set(self.settings['visible'])
+        info = self.snapshot.info if self.snapshot else {}
+
+        def fresh(key):
+            if key not in visible and ':' not in key:
+                return None, None
+            text, ok, item = self.value_text(key, now)
+            return (text, item) if ok else (None, None)
+
+        def chip(prefix):
+            """'35% · 63°C' from load and temperature, whichever are shown and fresh."""
+            parts, worst = [], None
+            for key in (f'{prefix}_util', f'{prefix}_temp'):
+                text, item = fresh(key)
+                if text:
+                    parts.append(text + ('C' if text.endswith('°') else ''))
+                    worst = self.poster_color(key, item) or worst
+            return ' · '.join(parts), worst
+
+        c = P.Content()
+        fps_text, _ = fresh('fps')
+        hero_chip = None
+        if fps_text:
+            frame, _ = fresh('frametime')
+            app = (info.get('fps_app') or 'Game').removesuffix('.exe').upper()
+            c.number, c.headline, c.caption, c.hero_key = fps_text, 'FPS', 'GAMING', 'fps'
+            c.subline = f'{app[:18]}  ·  {frame.upper()}' if frame else app[:24]
+        else:
+            c.caption = 'MONITOR'
+            gpu_shown = bool(fresh('gpu_temp')[0] or fresh('gpu_util')[0])
+            hero_chip = 'gpu' if self.settings['poster_hero'] == 'gpu' and gpu_shown else 'cpu'
+            c.headline = hero_chip.upper()
+            temp, temp_item = fresh(f'{hero_chip}_temp')
+            load, _ = fresh(f'{hero_chip}_util')
+            if temp:
+                c.number, c.unit, c.hero_key = f'{temp_item.value:.0f}', '°C', f'{hero_chip}_temp'
+                c.subline = f'{load} LOAD' if load else short_device(info.get(f'{hero_chip}_name')).upper()
+            elif load:
+                c.number, c.unit, c.subline, c.hero_key = load.rstrip('%'), '%', 'LOAD', f'{hero_chip}_util'
+            else:
+                c.number, c.hero_key, c.subline = '--', f'{hero_chip}_temp', 'NO SENSOR'
+        system = []
+        for prefix, label in (('cpu', 'CPU'), ('gpu', 'GPU')):
+            if prefix != hero_chip:
+                text, worst = chip(prefix)
+                if text:
+                    system.append(P.Row(label, text, worst, key=f'{prefix}_temp'))
+        for key, label in (('ram_used', 'MEMORY'), ('gpu_vram', 'VRAM')):
+            text, item = fresh(key)
+            if text:
+                system.append(P.Row(label, text.replace('/', ' / '), self.poster_color(key, item), key=key))
+        if system:
+            c.groups.append(P.Group('SYSTEM', system))
+
+        def simple(caption, keys):
+            rows = []
+            for key, label in keys:
+                text, item = fresh(key)
+                if text:
+                    rows.append(P.Row(label.upper(), text.upper(), self.poster_color(key, item), key=key))
+            if rows:
+                c.groups.append(P.Group(caption, rows))
+        simple('NETWORK', (('net_down', 'Down'), ('net_up', 'Up')))
+        simple('DISK', (('disk_active', 'Active'), ('disk_read', 'Read'), ('disk_write', 'Write')))
+        fans = []
+        for fid, label in self.visible_fans():
+            text, _ = fresh('fan:' + fid)
+            if text:
+                fans.append(P.Row(label.upper(), text.upper(), key='fan:' + fid))
+        text, _ = fresh('gpu_fan')
+        if text:
+            fans.append(P.Row('GPU FAN', text.upper(), key='gpu_fan'))
+        if fans:
+            c.groups.append(P.Group('FANS', fans))
+        batteries = []
+        for bid, name in self.visible_batteries():
+            text, item = fresh('bat:' + bid)
+            if text:
+                gauge = item.value / 100 if text.endswith('%') else None
+                batteries.append(P.Row(name.upper(), text.upper(), self.poster_color('bat:' + bid, item), gauge,
+                                       key='bat:' + bid))
+        if batteries:
+            c.groups.append(P.Group('BATTERIES', batteries))
+        if 'clock' in visible:
+            stamp = datetime.now()
+            c.groups.append(P.Group('TIME', [P.Row(stamp.strftime('%a %d %b').upper(), stamp.strftime('%H:%M'),
+                                                   key='clock')]))
+        return c
+
+    def paint_poster(self, p):
+        # Fully transparent pixels do not take clicks on Windows, so a 1/255 fill keeps
+        # the whole widget draggable and right-clickable without showing a panel.
+        p.fillRect(self.rect(), QColor(0, 0, 0, 1))
+        ink = P.ink_for(self.settings['theme'], self.settings['accent'])
+        _, hits = P.paint(p, self.poster, self.poster_scale(), ink, self.size())
+        now = time.monotonic()
+        self.hits = []
+        snap = self.snapshot
+        for rect, key in hits:
+            if not key or key == 'clock':
+                continue
+            text, fresh, item = self.value_text(key, now)
+            label = BY_KEY[key].label if key in BY_KEY else key
+            if key.startswith('fan:') and snap and key[4:] in snap.fans:
+                label = snap.fans[key[4:]][0]
+            if key.startswith('bat:') and snap and key[4:] in snap.batteries:
+                label = snap.batteries[key[4:]][0]
+            self.hits.append((rect, f'{label}: {text}\n' + self.hint(key, item, fresh)))
+
     # -- painting ----------------------------------------------------------
     def paintEvent(self, event):
+        if self.is_poster():
+            if self.poster is None:
+                self.relayout()
+            painter = QPainter(self)
+            self.paint_poster(painter)
+            return
         theme = THEMES[self.settings['theme']]
         accent = QColor(self.settings['accent'])
         s, px = self.metrics()
