@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,6 +67,7 @@ class FrameTrackerTests(unittest.TestCase):
 
     def test_auto_uses_foreground_and_ignores_shell(self):
         t = tracker(foreground=12)
+        t.busiest_when_unknown = False   # Windows: the focused window is always known
         t.feed(V1)
         feed_frames(t, 'game.exe', 12, 50)
         feed_frames(t, 'explorer.exe', 13, 60)
@@ -74,6 +76,23 @@ class FrameTrackerTests(unittest.TestCase):
         t.foreground = lambda: 13
         t.auto_since = -100
         self.assertEqual(t.read('', now=100.1), ({}, None))
+
+    def test_auto_follows_busiest_when_focus_unknown(self):
+        t = tracker(foreground=77)       # Linux: a stale XWayland window, not presenting
+        t.busiest_when_unknown = True
+        t.feed(V1)
+        feed_frames(t, 'game.exe', 12, 50)
+        feed_frames(t, 'explorer.exe', 13, 60)   # shell processes are still ignored
+        feed_frames(t, 'launcher', 14, 30)
+        self.assertEqual(t.read('', now=100.1)[1], 'game.exe')
+
+    def test_replaced_swapchain_is_ignored(self):
+        t = tracker(foreground=12)
+        for i in range(30):              # old swapchain: 30 fps, then the game recreates it
+            t.add(12, 'game.exe', 'old', 90.0 + i / 30, 1000 / 30, now=100.0)
+        for i in range(10):              # new swapchain, three seconds later: 10 fps so far
+            t.add(12, 'game.exe', 'new', 94.0 + i / 10, 100.0, now=100.0)
+        self.assertAlmostEqual(t.read('', now=100.0)[0]['fps'].value, 10.0)
 
     def test_stale_is_unavailable_not_zero(self):
         t = tracker()
@@ -275,7 +294,11 @@ class WidgetTests(QtTestCase):
             window.show()            # showEvent → refresh_live
             window.refresh_live()
             self.assertIn('Status: OK', window.fps_status.text())
-            self.assertTrue(window.auto_label.text().startswith('Automatic helper:'))
+            if sys.platform.startswith('linux'):
+                self.assertIn('Linux kernel sensors', window.status_label.text())
+                self.assertTrue(window.auto_label.isHidden())
+            else:
+                self.assertTrue(window.auto_label.text().startswith('Automatic helper:'))
             window.close()
 
 

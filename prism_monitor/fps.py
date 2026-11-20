@@ -17,7 +17,10 @@ helper (already elevated) can run PresentMon and relay its CSV.
 import collections
 import csv
 import os
+import socket
+import struct
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -50,6 +53,8 @@ class FrameTracker:
         self.processes = {}          # pid -> {'name', 'chains': {swapchain: deque[(t, ms)]}, 'seen'}
         self.auto_pid = None
         self.auto_since = 0.0
+        self.busiest_when_unknown = sys.platform.startswith('linux')
+        self.source = 'vklayer' if self.busiest_when_unknown else 'presentmon'
 
     def reset(self):
         with self.lock:
@@ -81,6 +86,10 @@ class FrameTracker:
             name = row[header['application']]
         except (KeyError, ValueError, IndexError):
             return
+        self.add(pid, name, chain, t, ms, now)
+
+    def add(self, pid, name, chain, t, ms, now=None):
+        """One present of `pid` on swapchain `chain`: t seconds (or None), ms since its previous present."""
         if pid == self.own_pid or pid <= 4:
             return
         now = time.monotonic() if now is None else now
@@ -101,10 +110,12 @@ class FrameTracker:
     @staticmethod
     def _stats(proc):
         best = None
-        for frames in proc['chains'].values():
-            if not frames:
-                continue
+        chains = [frames for frames in proc['chains'].values() if frames]
+        newest = max((frames[-1][0] for frames in chains), default=None)
+        for frames in chains:
             latest = frames[-1][0]
+            if latest < newest - STALE_S:
+                continue   # a swapchain the game replaced (resize, mode change) keeps its last frames forever
             window = [ms for t, ms in frames if t >= latest - WINDOW_S and 0 < ms < 5000]
             if window and (best is None or len(window) > len(best)):
                 best = window
@@ -138,6 +149,15 @@ class FrameTracker:
         # Brief grace when focus moves to a non-presenting window (e.g. a notification).
         if self.auto_pid in live and now - self.auto_since < 3.0:
             return self.auto_pid
+        if self.busiest_when_unknown:
+            # Linux/Wayland: the focused app is not always knowable (X11's active window can be a stale
+            # XWayland window while a Wayland app has focus). Follow the busiest presenter.
+            best, best_fps = None, 0.0
+            for pid, proc in live.items():
+                stats = self._stats(proc)
+                if stats and stats[0] > best_fps and proc['name'].casefold() not in AUTO_IGNORED:
+                    best, best_fps = pid, stats[0]
+            return best
         return None
 
     def read(self, target='', now=None):
@@ -154,8 +174,8 @@ class FrameTracker:
         if not stats:
             return {}, name
         fps, frametime, worst = stats
-        return {'fps': reading(fps, 'presentmon', now=now),
-                'frametime': reading(frametime, 'presentmon', extra=worst, now=now)}, name
+        return {'fps': reading(fps, self.source, now=now),
+                'frametime': reading(frametime, self.source, extra=worst, now=now)}, name
 
 
 class LocalPresentMon:
@@ -231,4 +251,93 @@ class LocalPresentMon:
             winapi.stop_trace_session(SESSION)
         if self.thread:
             self.thread.join(3)
+            self.thread = None
+
+
+class LinuxFrameReceiver:
+    """Receives present timestamps from Prism Monitor's Vulkan layer (see monitor/vklayer).
+
+    Same interface as LocalPresentMon. The socket lives in the abstract namespace, so it
+    reaches games inside Steam's container runtime too. Each datagram's sender uid and pid
+    come from the kernel (SO_PASSCRED); datagrams from other users are dropped.
+    """
+    PREFIX = 'PFPS1'
+
+    def __init__(self, tracker, name=None):
+        self.tracker = tracker
+        self.address = '\0' + (name or f'prism-monitor-fps-{os.getuid()}')
+        self.sock = None
+        self.thread = None
+        self.error = None
+        self.got_header = False      # True once any game has sent a frame
+        self.last = {}               # (pid, chain) -> previous timestamp in seconds
+        self.uid = os.getuid()
+
+    @property
+    def running(self):
+        return self.sock is not None and self.thread is not None and self.thread.is_alive()
+
+    def start(self):
+        if self.running:
+            return True
+        self.error = None
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
+            sock.bind(self.address)
+        except OSError as e:
+            self.error = (f'Could not open the FPS socket: {e}. Is another Prism Monitor running?'
+                          if getattr(e, 'errno', None) == 98 else f'Could not open the FPS socket: {e}.')
+            return False
+        sock.settimeout(0.5)
+        self.sock = sock
+        self.tracker.reset()
+        self.last.clear()
+        self.thread = threading.Thread(target=self._pump, args=(sock,), name='fps-layer', daemon=True)
+        self.thread.start()
+        return True
+
+    def _pump(self, sock):
+        creds_size = socket.CMSG_SPACE(struct.calcsize('3i'))
+        while self.sock is sock:
+            try:
+                data, ancillary, _flags, _addr = sock.recvmsg(512, creds_size)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            pid = uid = None
+            for level, kind, payload in ancillary:
+                if level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS and len(payload) >= 12:
+                    pid, uid, _gid = struct.unpack('3i', payload[:12])
+            if uid != self.uid or not pid:
+                continue
+            self.handle(pid, data)
+
+    def handle(self, pid, data, now=None):
+        parts = data.decode('utf-8', 'replace').split('\t', 3)
+        if len(parts) != 4 or parts[0] != self.PREFIX:
+            return
+        try:
+            t = int(parts[2]) / 1e9
+        except ValueError:
+            return
+        chain, name = parts[1], parts[3].strip()
+        key = (pid, chain)
+        previous = self.last.get(key)
+        self.last[key] = t
+        if len(self.last) > 512:
+            self.last = {key: t}
+        if previous is None or t <= previous:
+            return
+        self.got_header = True
+        self.tracker.add(pid, name, chain, t, (t - previous) * 1000.0, now)
+
+    def stop(self):
+        sock, self.sock = self.sock, None
+        if sock is not None:
+            sock.close()
+        if self.thread:
+            self.thread.join(2)
             self.thread = None

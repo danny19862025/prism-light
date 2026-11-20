@@ -12,6 +12,9 @@ import sys
 from ctypes import wintypes
 
 WINDOWS = sys.platform == 'win32'
+LINUX = sys.platform.startswith('linux')
+if LINUX:
+    from . import linuxapi
 
 if WINDOWS:
     kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -168,6 +171,8 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 def process_image_name(pid):
     """Executable file name for a PID, or None (no special rights needed for own-session processes)."""
+    if LINUX and pid:
+        return linuxapi.process_name(pid)
     if not WINDOWS or not pid:
         return None
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
@@ -184,6 +189,8 @@ def process_image_name(pid):
 
 
 def foreground_pid():
+    if LINUX:
+        return linuxapi.foreground_pid()
     if not WINDOWS:
         return None
     pid = wintypes.DWORD()
@@ -440,6 +447,8 @@ def set_execution_state(system, display=False):
     Same mechanism as macOS `caffeinate -i/-d`: an assertion Windows drops when this
     thread or process ends, so a crash can never leave the PC unable to sleep.
     """
+    if LINUX:
+        return linuxapi.set_execution_state(system, display)
     if not WINDOWS:
         return False
     flags = ES_CONTINUOUS
@@ -463,6 +472,8 @@ INVALID_HANDLE = ctypes.c_void_p(-1).value
 
 def running_processes():
     """{pid: exe name} for every process (names only; no special rights needed)."""
+    if LINUX:
+        return linuxapi.running_processes()
     if not WINDOWS:
         return {}
     kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
@@ -484,6 +495,8 @@ def running_processes():
 
 def windowed_pids():
     """PIDs owning a visible, titled top-level window: the apps a user thinks of as "open"."""
+    if LINUX:
+        return linuxapi.windowed_pids()
     if not WINDOWS:
         return set()
     pids = set()
@@ -502,6 +515,8 @@ def windowed_pids():
 def downloads_folder():
     """The user's Downloads folder (honours a relocated folder)."""
     path = None
+    if LINUX:
+        return linuxapi.downloads_folder()
     if WINDOWS:
         try:
             import winreg
@@ -515,6 +530,8 @@ def downloads_folder():
 
 def sleep_now(hibernate=False):
     """Sleep or hibernate (no administrator rights needed)."""
+    if LINUX:
+        return linuxapi.sleep_now(hibernate)
     if not WINDOWS:
         return False
     powrprof = ctypes.WinDLL('powrprof')
@@ -522,11 +539,15 @@ def sleep_now(hibernate=False):
 
 
 def lock_now():
+    if LINUX:
+        return linuxapi.lock_now()
     return bool(WINDOWS and user32.LockWorkStation())
 
 
 def shutdown_now():
     """Normal Windows shutdown (apps may still ask to save their work)."""
+    if LINUX:
+        return linuxapi.shutdown_now()
     if not WINDOWS:
         return False
     import subprocess

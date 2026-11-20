@@ -5,6 +5,7 @@ It repaints only when a new snapshot arrives (once per polling interval) and
 has no animations, so it costs almost nothing while idle.
 """
 import collections
+import sys
 import time
 from datetime import datetime
 
@@ -225,7 +226,7 @@ class MonitorWidget(QWidget):
         return s, px
 
     def mkfont(self, px, weight=QFont.Normal, family=None):
-        font = QFont(family or 'Segoe UI Variable Text')
+        font = QFont(family or ('Noto Sans' if sys.platform.startswith('linux') else 'Segoe UI Variable Text'))
         font.setPixelSize(max(6, round(px)))
         font.setWeight(weight)
         font.setHintingPreference(QFont.PreferNoHinting)
@@ -608,7 +609,8 @@ class MonitorWidget(QWidget):
             return 'Looking for devices…'
         if fresh:
             src = {'lhm': 'LibreHardwareMonitor (sensor helper)', 'adl': 'AMD driver (ADL)', 'pdh': 'Windows performance counters',
-                   'windows': 'Windows', 'presentmon': 'PresentMon'}.get(item.source, item.source)
+                   'windows': 'Windows', 'presentmon': 'PresentMon', 'linux': 'Linux kernel sensors',
+                   'vklayer': 'Prism Monitor Vulkan layer', 'upower': 'UPower'}.get(item.source, item.source)
             extra = ''
             if key == 'frametime' and item.extra:
                 extra = f'\nWorst frame in the last second: {item.extra:.1f} ms'

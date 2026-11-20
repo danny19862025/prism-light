@@ -1,4 +1,4 @@
-# Prism Monitor: hardware statistics widget for Windows 11
+# Prism Monitor: hardware statistics widget for Windows 11 and Linux
 
 A compact, translucent desktop widget showing live CPU, GPU, memory and game FPS readings, with optional network, disk, fan and clock tiles. It runs as a standard user. Sensors that need administrator rights are read by a separate helper process, which you start yourself.
 
@@ -56,6 +56,34 @@ Click the **Keep awake** button on the widget, or use **Keep awake** in the tray
 It uses the Windows `SetThreadExecutionState` request, the same one video players use. It needs no administrator rights, and Windows drops it automatically if Prism Monitor quits or crashes. It does not override closing the laptop lid or pressing the power button.
 
 Settings are saved to `%APPDATA%\PrismMonitor\settings.json`. **Launch at login** is off by default. When enabled, it adds a per-user `HKCU\…\Run` entry and needs no administrator rights.
+
+## Linux
+
+Prism Monitor runs on Linux from source with the same widget, settings, Keep awake, batteries and FPS. Tested on Arch Linux with KDE Plasma 6 (Wayland), Ryzen 9 9900X and RX 9070 XT.
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python tools/build_fps_layer.py    # optional: game FPS (needs a C compiler)
+.venv/bin/python monitor_main.py
+```
+
+| Windows | Linux |
+|---|---|
+| PDH counters, GlobalMemoryStatusEx | `/proc/stat`, `/proc/meminfo`, `/proc/net/dev`, `/proc/diskstats`, cpufreq |
+| Sensor helper (LibreHardwareMonitor + PawnIO) for CPU temperature, power and fans | No helper and no administrator rights: hwmon (`k10temp`, `coretemp`, `zenpower`), RAPL `energy_uj`, hwmon fan inputs |
+| AMD ADL | The `amdgpu` driver's hwmon and sysfs files (edge/junction temperature, power, sclk, fan, `gpu_busy_percent`, VRAM) |
+| PresentMon (ETW) | A small Vulkan layer (`monitor/vklayer/prism_fps_layer.c`) that sends each present's timestamp to the widget |
+| SetThreadExecutionState | The desktop's D-Bus inhibitors (`org.freedesktop.PowerManagement`, `org.freedesktop.ScreenSaver`), released when the app exits |
+| Sleep, hibernate, lock, shut down | `systemctl suspend/hibernate`, `loginctl lock-session`, KDE's or GNOME's own shutdown (apps may still ask to save) |
+| Bluetooth/XInput/HID batteries | UPower (kernel hid-playstation, xpad and Logitech drivers, BlueZ) |
+| Run key | `~/.config/autostart/prism-monitor.desktop` |
+
+**Window placement.** Wayland lets no app place its own window, keep it above or below other windows, or pass clicks through to the desktop. On a Wayland session with XWayland, Prism Monitor therefore runs its widget through XWayland (`QT_QPA_PLATFORM=xcb`), where KDE and GNOME honour all of these. Set `QT_QPA_PLATFORM` yourself to override.
+
+**Motherboard fans** appear when the kernel has a driver for the board's Super I/O chip (`nct6775` for most ASUS/MSI boards; Gigabyte boards usually need the out-of-tree `it87` driver). `sensors` from lm_sensors shows whether fan inputs exist.
+
+**Game FPS.** While FPS or frame time is shown, Prism Monitor copies the built layer to `~/.local/share/prism-monitor/` and registers it in `~/.local/share/vulkan/implicit_layer.d/prism_monitor_fps.json`; hiding both removes it again. The layer counts Vulkan presents, which includes Windows games running on Proton (DXVK/VKD3D-Proton), and sends one datagram per present to an abstract Unix socket checked against your user id. It never draws, changes or delays frames, and does nothing while Prism Monitor is not running. Games started before the layer was installed are counted from their next launch. Native OpenGL games and Flatpak apps are not measured. To leave one game out, add `DISABLE_PRISM_FPS=1` to its launch options. **Automatic** follows the focused game when it is an X11/XWayland window (most Proton games), otherwise the busiest presenting game.
 
 ## Metrics and where they come from
 

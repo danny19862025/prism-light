@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Separate settings window; every change applies immediately."""
+import sys
 import datetime
 
 from PySide6.QtCore import Qt, QTime, QTimer, Signal
@@ -30,7 +31,7 @@ def stylesheet(theme, accent):
     rim = f'rgba({acc.red()}, {acc.green()}, {acc.blue()}, 120)'
     side = QColor(bg).darker(118).name() if theme != 'light' else '#e9ebf2'
     return f"""
-    QWidget {{ background: {bg}; color: {text}; font-family: "Segoe UI Variable Text", "Segoe UI"; font-size: 10.5pt; }}
+    QWidget {{ background: {bg}; color: {text}; font-family: "Segoe UI Variable Text", "Segoe UI", "Noto Sans", sans-serif; font-size: 10.5pt; }}
     QListWidget#sidebar {{ background: {side}; border: none; border-right: 1px solid {line}; padding: 14px 10px;
                            outline: none; font-size: 11pt; }}
     QListWidget#sidebar::item {{ color: {dim}; padding: 0 14px; margin: 2px 0; border-radius: 9px;
@@ -95,6 +96,19 @@ FPS_NOTES = (
     'the game and are counted. Capture needs administrator rights or membership of the Windows "Performance Log '
     'Users" group; otherwise start the sensor helper and FPS is relayed from it.'
 )
+LINUX = sys.platform.startswith('linux')
+if LINUX:
+    FPS_NOTES = (
+        '<b>How FPS is measured.</b> A small Vulkan layer that Prism Monitor installs for your account '
+        '(<code>~/.local/share/vulkan/implicit_layer.d</code>) notes the time of each frame a game presents and '
+        'sends it to the widget over a private local socket. The widget shows the presented frame rate and average '
+        'frame time of the <i>selected game process</i> over the last second; its own drawing and your monitor\'s '
+        'refresh rate are not counted. The layer does not draw anything or change frames.<br><br>'
+        '<b>Compatibility.</b> Works with Vulkan games, which includes Windows games running through Proton/DXVK/'
+        'VKD3D on Steam, in windowed, borderless and fullscreen modes. Not measured: native OpenGL games, Flatpak '
+        'apps (their sandbox hides the layer) and games streamed from another PC. Start a game after turning FPS on; '
+        'games already running are not counted. To leave a game out, start it with <code>DISABLE_PRISM_FPS=1</code>.'
+    )
 
 
 class SettingsWindow(QWidget):
@@ -164,7 +178,7 @@ class SettingsWindow(QWidget):
         theme.addItem('Dark', 'dark')
         theme.addItem('Midnight', 'midnight')
         theme.addItem('Light', 'light')
-        theme.addItem('System (follow Windows light/dark mode)', 'system')
+        theme.addItem('System (follow the system light/dark mode)' if LINUX else 'System (follow Windows light/dark mode)', 'system')
         theme.setCurrentIndex(max(0, theme.findData(self.settings['theme'])))
         theme.currentIndexChanged.connect(lambda: self.set('theme', theme.currentData()))
         form.addRow('Theme', theme)
@@ -353,7 +367,8 @@ class SettingsWindow(QWidget):
             lambda: self.set('cpu_temp_sensor', self.cpu_sensor.currentData() or ''))
         cpu_row.addWidget(self.cpu_sensor, 1)
         layout.addLayout(cpu_row)
-        layout.addWidget(QLabel('Motherboard fans to show (needs the sensor helper):'))
+        layout.addWidget(QLabel('Motherboard fans to show (read by the kernel\'s hwmon driver):' if LINUX
+                                 else 'Motherboard fans to show (needs the sensor helper):'))
         self.fan_list = QListWidget()
         self.fan_list.setMaximumHeight(110)
         self.fan_list.itemChanged.connect(self.update_fans)
@@ -390,6 +405,8 @@ class SettingsWindow(QWidget):
                           ('click_through', 'Click-through (turn off from the tray icon)'),
                           ('launch_at_login', 'Launch at login'),
                           ('helper_autostart', 'Start the sensor helper on launch (shows the administrator prompt)')):
+            if LINUX and key == 'helper_autostart':
+                continue   # no helper on Linux: the kernel's sensors need no administrator rights
             check = QCheckBox(text)
             check.setChecked(self.settings[key])
             check.toggled.connect(lambda v, k=key: self.set(k, v))
@@ -504,6 +521,7 @@ class SettingsWindow(QWidget):
         row.addWidget(stop)
         row.addStretch()
         layout.addLayout(row)
+        self.helper_controls = [start, stop]
         auto = QHBoxLayout()
         self.setup_button = QPushButton('Set up automatic sensor helper…')
         self.setup_button.setToolTip('One administrator prompt: copies the helper into Program Files and registers an '
@@ -518,6 +536,20 @@ class SettingsWindow(QWidget):
         self.auto_label = QLabel()
         self.auto_label.setWordWrap(True)
         layout.addWidget(self.auto_label)
+        self.helper_controls += [self.setup_button, self.remove_button, self.auto_label]
+        if LINUX:
+            for control in self.helper_controls:
+                control.hide()
+            info = QLabel(
+                'The widget runs as your user and needs no administrator rights or helper on Linux. CPU load, clock, '
+                'temperature (k10temp/coretemp) and package power (RAPL), RAM, network and disk come from the '
+                'kernel (<code>/proc</code> and <code>/sys</code>); the AMD GPU from the amdgpu driver; batteries '
+                'from UPower. Motherboard fans show when the kernel has a driver for the board\'s fan chip, for '
+                'example <code>nct6775</code> or <code>it87</code>; check with <code>sensors</code>.')
+            info.setWordWrap(True)
+            layout.addWidget(info)
+            layout.addStretch()
+            return w
         info = QLabel(
             'The widget runs as a standard user. GPU (AMD driver), CPU load and clock estimate, RAM, network '
             'and disk need no special rights. CPU temperature, CPU package power, measured core clocks and '
@@ -738,18 +770,25 @@ class SettingsWindow(QWidget):
         status = snapshot.status if snapshot else {}
         names = {'system': 'Windows counters (CPU load/clock, RAM, network, disk)', 'adl': 'AMD GPU driver (ADL)',
                  'fps': 'PresentMon FPS'}
+        if LINUX:
+            names = {'system': 'Linux kernel sensors (CPU, RAM, network, disk, fans)', 'adl': 'AMD GPU driver (amdgpu)',
+                     'fps': 'Vulkan FPS layer'}
         lines = [f'<b>{names[k]}:</b> {status.get(k, "starting…")}' for k in names]
-        state, detail = helper_state
-        lines.append(f'<b>Sensor helper:</b> {state} — {detail}')
-        from .host import installed_root, task_status
-        auto_status = task_status()
-        self.auto_label.setText('Automatic helper: ' + {
-            'ready': f'set up ({installed_root()}); starts without a prompt.',
-            'outdated': 'set up, but from a different version; run the repair/update button.',
-            'missing': 'not set up; the helper needs an administrator prompt each time.'}[auto_status])
-        self.setup_button.setText('Set up automatic sensor helper…' if auto_status == 'missing'
-                                  else 'Repair / update automatic helper…')
-        self.remove_button.setEnabled(auto_status != 'missing')
+        if LINUX:
+            if status.get('batteries'):
+                lines.append(f"<b>Batteries:</b> {status['batteries']}")
+        else:
+            state, detail = helper_state
+            lines.append(f'<b>Sensor helper:</b> {state} — {detail}')
+            from .host import installed_root, task_status
+            auto_status = task_status()
+            self.auto_label.setText('Automatic helper: ' + {
+                'ready': f'set up ({installed_root()}); starts without a prompt.',
+                'outdated': 'set up, but from a different version; run the repair/update button.',
+                'missing': 'not set up; the helper needs an administrator prompt each time.'}[auto_status])
+            self.setup_button.setText('Set up automatic sensor helper…' if auto_status == 'missing'
+                                      else 'Repair / update automatic helper…')
+            self.remove_button.setEnabled(auto_status != 'missing')
         if snapshot and snapshot.info.get('cpu_temp_sensor'):
             lines.append(f"<b>CPU temperature sensor:</b> {snapshot.info['cpu_temp_sensor']}")
         self.status_label.setText('<br>'.join(lines))

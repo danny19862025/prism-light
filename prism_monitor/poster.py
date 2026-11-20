@@ -10,6 +10,7 @@ values are measured with their digits replaced by '0', so the widget does not ch
 each time a number changes.
 """
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -116,6 +117,17 @@ def ink_for(theme_name, text='', accent=''):
 FONTS = (('Barlow (like the Still clock)', ''), ('Bahnschrift', 'Bahnschrift'),
          ('Segoe UI Variable', 'Segoe UI Variable Display'), ('Arial', 'Arial'), ('Consolas', 'Consolas'),
          ('Georgia', 'Georgia'), ('Impact', 'Impact'))
+if sys.platform.startswith('linux'):
+    # Common Linux families; the menu leaves out any that are not installed.
+    FALLBACK = 'Noto Sans'
+    FONTS = (('Barlow (like the Still clock)', ''), ('Noto Sans', 'Noto Sans'), ('Inter', 'Inter'),
+             ('Cantarell', 'Cantarell'), ('DejaVu Sans', 'DejaVu Sans'), ('Liberation Sans', 'Liberation Sans'),
+             ('Ubuntu', 'Ubuntu'), ('Hack', 'Hack'), ('Noto Sans Mono', 'Noto Sans Mono'),
+             ('Noto Serif', 'Noto Serif'))
+
+
+def installed(family):
+    return not family or family in QFontDatabase.families()
 
 # Colour choices offered in the menu: (name, hex). '' = automatic for the theme.
 TEXT_COLOURS = (('Automatic', ''), ('White', '#ffffff'), ('Warm white', '#fff1dc'), ('Light blue', '#8fd8ff'),

@@ -18,11 +18,13 @@ from .awake import AFTER, KeepAwake
 from .awake_ui import AwakeMenu, CountdownDialog
 from .batteries import BatteryMonitor, scan as scan_batteries
 from .collector import Collector
-from .fps import FrameTracker, LocalPresentMon
+from .fps import FrameTracker, LinuxFrameReceiver, LocalPresentMon
 from .host import HostClient, vendor_dir
 from .settings import Settings
 from .settings_window import SettingsWindow
 from .widget import MonitorWidget
+
+LINUX = sys.platform.startswith('linux')
 
 APP_NAME = 'Prism Monitor'
 
@@ -67,7 +69,10 @@ class PrismMonitor:
         self.collector.cpu_temp_sensor = settings['cpu_temp_sensor']
         self.batteries = BatteryMonitor(scanner=lambda: scan_batteries(self.settings['battery_wake_bt']))
         self.collector.batteries = self.batteries
-        self.presentmon = LocalPresentMon(vendor_dir() / 'presentmon' / 'PresentMon.exe', self.tracker)
+        if LINUX:
+            self.presentmon = LinuxFrameReceiver(self.tracker)   # same interface, fed by the Vulkan layer
+        else:
+            self.presentmon = LocalPresentMon(vendor_dir() / 'presentmon' / 'PresentMon.exe', self.tracker)
         self.fps_mode = 'local'
         self.fps_retry_at = 0.0
         self.widget = MonitorWidget(settings)
@@ -114,7 +119,9 @@ class PrismMonitor:
         self.supervise_fps()
         self.fps_timer.start()
         self.hint_pending = False
-        if settings['helper_task']:
+        if LINUX:
+            pass   # no sensor helper on Linux: the kernel's sensors need no administrator rights
+        elif settings['helper_task']:
             QTimer.singleShot(800, self.start_automatic_helper)   # installed task: no prompt
         elif settings['helper_autostart']:
             QTimer.singleShot(1500, self.start_helper)
@@ -224,6 +231,8 @@ class PrismMonitor:
         actions = {}
         P.load_fonts()
         for name, family in P.FONTS:
+            if LINUX and not P.installed(family):   # Windows presets ship with Windows
+                continue
             action = QAction(name, menu, checkable=True)
             action.setFont(P.font(15, family=family))
             action.triggered.connect(lambda _=False, f=family: self.set_and_apply('poster_font', f))
@@ -310,8 +319,9 @@ class PrismMonitor:
         status = task_status()
         self.act_setup.setText('Set up automatic CPU sensors (one-time)…' if status == 'missing'
                                else 'Update CPU sensor helper…')
-        self.act_setup.setVisible(not automatic or status != 'ready')
+        self.act_setup.setVisible((not automatic or status != 'ready') and not LINUX)
         self.act_setup.setEnabled(self.host.state != 'setup')
+        self.act_helper.setVisible(not LINUX)
 
     def system_theme_changed(self, *_):
         if self.settings['theme'] == 'system':
@@ -564,6 +574,9 @@ class PrismMonitor:
         if self.closing:
             return
         visible = set(self.settings['visible'])
+        if LINUX:
+            self.supervise_fps_linux(bool(visible & {'fps', 'frametime'}))
+            return
         if not visible & {'fps', 'frametime'}:
             self.presentmon.stop()
             self.host.set_presentmon(False) if self.host.want_presentmon else None
@@ -600,6 +613,25 @@ class PrismMonitor:
         self.fps_retry_at = time.monotonic() + 5
         if not self.presentmon.start():
             self.collector.fps_note = self.presentmon.error
+
+    def supervise_fps_linux(self, wanted):
+        """Linux: the Vulkan layer is installed while FPS is shown, and removed when it is hidden."""
+        from . import vklayer
+        if not wanted:
+            self.presentmon.stop()
+            if vklayer.status() != 'unbuilt':
+                vklayer.uninstall()
+            self.collector.fps_note = 'FPS capture is off (FPS and frame time are hidden).'
+            return
+        ok, message = vklayer.install()
+        if not ok:
+            self.collector.fps_note = message
+            return
+        if not self.presentmon.running and not self.presentmon.start():
+            self.collector.fps_note = self.presentmon.error
+            return
+        self.collector.fps_note = ('OK' if self.presentmon.got_header else
+                                   'Waiting for a Vulkan game. Games started before FPS was turned on are not counted.')
 
     def supervise_batteries(self):
         """Scan device batteries only while the Batteries card is shown."""
@@ -646,6 +678,11 @@ def main(argv=None):
     parser.add_argument('--setup-helper', action='store_true',
                         help='run the one-time automatic sensor helper setup (one administrator prompt)')
     args, _ = parser.parse_known_args(argv)
+    if LINUX and os.environ.get('WAYLAND_DISPLAY') and os.environ.get('DISPLAY') \
+            and not os.environ.get('QT_QPA_PLATFORM') and not args.smoke_test:
+        # Wayland lets no app place its own window, keep it above or below others, or let clicks pass
+        # through to the desktop. Through XWayland, KDE and GNOME honour all of these for the widget.
+        os.environ['QT_QPA_PLATFORM'] = 'xcb'
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv[:1])
     app.setApplicationName('PrismMonitor')

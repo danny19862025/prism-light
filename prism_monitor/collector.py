@@ -11,6 +11,7 @@ import traceback
 from PySide6.QtCore import QObject, Signal
 
 from .model import Reading, Snapshot
+from .linux_sources import LINUX, LinuxGpuSource, LinuxSystemSource
 from .sources import AdlGpuSource, SystemSource
 
 
@@ -53,8 +54,8 @@ class Collector(QObject):
             return None
 
     def _run(self):
-        system = self._open(SystemSource, 'system')
-        gpu = self._open(AdlGpuSource, 'adl')
+        system = self._open(LinuxSystemSource if LINUX else SystemSource, 'system')
+        gpu = self._open(LinuxGpuSource if LINUX else AdlGpuSource, 'adl')
         if system:
             self.info['cpu_name'] = system.cpu_name
         if gpu:
@@ -84,6 +85,9 @@ class Collector(QObject):
                     else:
                         snap.readings[key] = item
                 snap.fans = fans
+                if LINUX and system is not None:
+                    snap.fans.update(system.fans())
+                    self._linux_cpu_temp(snap, system.info)
                 for key, value in host_info.items():
                     snap.info.setdefault(key, value)
                 chosen = self.cpu_temp_sensor
@@ -109,6 +113,19 @@ class Collector(QObject):
                         source.close()
                     except Exception:
                         pass
+
+    def _linux_cpu_temp(self, snap, info):
+        """Kernel CPU temperature sensors; honour the sensor chosen in Settings."""
+        temps = info.get('cpu_temps') or {}
+        if not temps:
+            return
+        snap.info['cpu_temps'] = dict(temps)
+        snap.info['cpu_temp_sensor'] = info.get('cpu_temp_sensor')
+        chosen = self.cpu_temp_sensor
+        if chosen in temps and 'cpu_temp' in snap.readings:
+            base = snap.readings['cpu_temp']
+            snap.readings['cpu_temp'] = Reading(temps[chosen], base.ts, base.source)
+            snap.info['cpu_temp_sensor'] = chosen
 
     def _add_batteries(self, snap):
         monitor = self.batteries

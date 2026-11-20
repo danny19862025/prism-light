@@ -7,6 +7,9 @@ All sources are unprivileged:
 - Xbox controllers through XInput.
 - A laptop or UPS battery through GetSystemPowerStatus.
 
+On Linux, UPower lists the same devices: the kernel's hid-playstation, xpad/xpadneo
+and Logitech drivers, plus Bluetooth devices through BlueZ.
+
 A background thread scans every SCAN_SECONDS, so a slow device never stalls the widget.
 """
 import ctypes
@@ -355,9 +358,89 @@ if sys.platform == 'win32':
             except Exception as e:   # one broken source never hides the others
                 status[key] = f'Error: {e}'
         return merge(found), status
+elif sys.platform.startswith('linux'):
+    import subprocess
+    from pathlib import Path
+
+    UPOWER_KINDS = {'gaming-input', 'mouse', 'keyboard', 'headset', 'headphones', 'touchpad', 'tablet', 'phone',
+                    'media-player', 'pen', 'speakers', 'bluetooth-generic', 'other', 'battery', 'ups', 'remote control'}
+    UPOWER_LEVELS = {'critical': ('Critical', 5.0), 'low': ('Low', 25.0), 'normal': ('Medium', 60.0),
+                     'high': ('High', 80.0), 'full': ('Full', 100.0)}
+
+    def parse_upower(text):
+        """Battery list from `upower --dump` (pure, unit-tested)."""
+        found = []
+        for block in text.split('\nDevice: ')[0:]:
+            lines = block.strip().splitlines()
+            if not lines or 'DisplayDevice' in lines[0]:
+                continue
+            fields, kind = {}, ''
+            for line in lines[1:]:
+                stripped = line.strip()
+                if ':' in stripped:
+                    key, _, value = stripped.partition(':')
+                    fields[key.strip()] = value.strip()
+                elif stripped and line.startswith('  ') and not line.startswith('    '):
+                    kind = stripped
+            if kind not in UPOWER_KINDS or fields.get('present', 'yes') != 'yes':
+                continue
+            try:
+                percent = float(fields.get('percentage', '').rstrip('%'))
+            except ValueError:
+                continue
+            state = {'charging': 'charging', 'fully-charged': 'full', 'pending-charge': 'charging'}.get(
+                fields.get('state', ''), '')
+            system = fields.get('power supply') == 'yes'
+            if system and kind not in ('battery', 'ups'):
+                continue
+            text_level = ''
+            level = fields.get('battery-level', 'none')
+            if level in UPOWER_LEVELS:   # the device reports a coarse level, not a percentage
+                text_level, percent = UPOWER_LEVELS[level]
+            name = 'This PC' if system else fields.get('model') or fields.get('vendor') or kind.replace('-', ' ').title()
+            ident = fields.get('serial') or fields.get('native-path') or lines[0].strip()
+            found.append(Battery('system' if system else ident, name, max(0.0, min(100.0, percent)), state,
+                                 text_level, 'upower'))
+        return found
+
+    def upower_batteries():
+        text = subprocess.run(['upower', '--dump'], capture_output=True, text=True, timeout=10).stdout
+        return parse_upower(text)
+
+    def sysfs_batteries(root=Path('/sys/class/power_supply')):
+        found = []
+        for supply in sorted(root.iterdir()) if root.is_dir() else []:
+            def get(name):
+                try:
+                    return (supply / name).read_text().strip()
+                except OSError:
+                    return ''
+            if get('type') != 'Battery' or get('present') == '0':
+                continue
+            try:
+                percent = float(get('capacity'))
+            except ValueError:
+                continue
+            device = get('scope') == 'Device'
+            state = {'Charging': 'charging', 'Full': 'full'}.get(get('status'), '')
+            name = get('model_name') or supply.name if device else 'This PC'
+            found.append(Battery(supply.name if device else 'system', name, percent, state, source='kernel'))
+        return found
+
+    def scan(wake_bluetooth=True):
+        """All batteries the desktop knows about: UPower (kernel drivers and Bluetooth), else sysfs."""
+        try:
+            items = upower_batteries()
+            return merge(items), {'upower': f'OK ({len(items)})'}
+        except (OSError, subprocess.SubprocessError) as e:
+            try:
+                items = sysfs_batteries()
+                return merge(items), {'upower': f'Unavailable: {e}', 'kernel': f'OK ({len(items)})'}
+            except OSError as e2:
+                return [], {'kernel': f'Error: {e2}'}
 else:
     def scan(wake_bluetooth=True):
-        return [], {'all': 'Device batteries are read on Windows only.'}
+        return [], {'all': 'Device batteries are read on Windows and Linux only.'}
 
 
 class BatteryMonitor:
