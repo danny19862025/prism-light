@@ -10,9 +10,10 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QColorDialog, QFontDialog, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import autostart
+from . import poster as P
 from .awake import AFTER, KeepAwake
 from .awake_ui import AwakeMenu, CountdownDialog
 from .batteries import BatteryMonitor, scan as scan_batteries
@@ -43,6 +44,15 @@ def make_icon(accent, awake=False):
         p.drawEllipse(QRectF(40, 2, 22, 22))
     p.end()
     return QIcon(pixmap)
+
+
+# Menu sections and the metrics each one switches, as in the Linux app's menu.
+SECTIONS = {'fps': ('fps', 'frametime'), 'system': ('cpu_temp', 'cpu_util', 'gpu_temp', 'gpu_util', 'ram_used'),
+            'fans': ('fans',), 'battery': ('battery',)}
+SIZES = {'Small': 0.8, 'Medium': 1.0, 'Large': 1.25}
+LAYERS = (('top', 'On top of windows (see it over games)'), ('normal', 'Normal'),
+          ('behind', 'Behind windows (on the desktop, like a clock)'))
+BACKDROPS = {'Off (like the Still clock)': 0.0, '25%': 0.25, '50%': 0.5, '75%': 0.75, '100%': 1.0}
 
 
 class PrismMonitor:
@@ -86,6 +96,8 @@ class PrismMonitor:
         self.host.owner_hwnd = lambda: int(self.widget.winId()) if self.widget.isVisible() else None
 
         self.build_tray()
+        # The System theme follows Windows when you switch between light and dark mode.
+        QGuiApplication.styleHints().colorSchemeChanged.connect(self.system_theme_changed)
         for screen in app.screens():
             self.watch_screen(screen)
         app.screenAdded.connect(self.watch_screen)
@@ -118,37 +130,50 @@ class PrismMonitor:
         self.tray.setToolTip(APP_NAME)
         menu = self.menu = QMenu()
         self.act_show = menu.addAction('Hide widget', self.toggle_widget)
+        self.layer_menu = menu.addMenu('Widget position')
+        self.act_layer = self.radio_menu(self.layer_menu, 'layer', LAYERS, lambda v: self.set_and_apply('layer', v))
         menu.addAction('Settings…', self.show_settings)
         menu.addSeparator()
+        self.act_sections = {}
+        for section, text in (('fps', 'Show FPS'), ('system', 'Show CPU / GPU / memory'),
+                              ('fans', 'Show fans'), ('battery', 'Show batteries')):
+            action = QAction(text, menu, checkable=True)
+            action.triggered.connect(lambda on, k=section: self.show_section(k, on))
+            menu.addAction(action)
+            self.act_sections[section] = action
+        self.look_menu = look = menu.addMenu('Look')
+        self.act_style = self.radio_menu(look, 'style', (('poster', 'Poster (like the Still clock)'), ('card', 'Card')),
+                                         lambda v: self.set_layout(v, 'style'))
+        self.hero_menu = menu.addMenu('Big number')
+        self.act_hero = self.radio_menu(self.hero_menu, 'poster_hero',
+                                        (('cpu', 'CPU temperature'), ('gpu', 'GPU temperature (CPU if no GPU sensor)')),
+                                        lambda v: self.set_and_apply('poster_hero', v))
+        self.size_menu = menu.addMenu('Size')
+        self.act_size = self.radio_menu(self.size_menu, 'scale', tuple((v, t) for t, v in SIZES.items()),
+                                        lambda v: self.set_and_apply('scale', v))
+        self.backdrop_menu = menu.addMenu('Background opacity')
+        self.act_backdrop = self.radio_menu(self.backdrop_menu, 'poster_opacity',
+                                            tuple((v, t) for t, v in BACKDROPS.items()),
+                                            lambda v: self.set_and_apply('poster_opacity', v))
+        self.font_menu = menu.addMenu('Font')
+        self.act_font = self.font_choices(self.font_menu)
+        self.text_menu = menu.addMenu('Text colour')
+        self.act_text = self.colour_menu(self.text_menu, 'poster_text', P.TEXT_COLOURS, 'Text colour')
+        self.number_menu = menu.addMenu('Number colour')
+        self.act_number = self.colour_menu(self.number_menu, 'poster_accent', P.NUMBER_COLOURS, 'Number colour')
+        self.layout_menu = menu.addMenu('Layout')
+        self.act_layout = self.radio_menu(self.layout_menu, 'orientation',
+                                          (('horizontal', 'Horizontal strip'), ('vertical', 'Vertical stand')),
+                                          self.set_layout)
+        menu.addSeparator()
+        self.act_lock = self.check_action('Lock position', 'locked')
+        self.act_click = self.check_action('Click-through (undo from the tray icon)', 'click_through')
+        self.act_login = self.check_action('Start when I sign in', 'launch_at_login')
         self.awake_menu = AwakeMenu(self.awake, os.getpid(), menu)
         self.awake_menu.settings_requested.connect(lambda: self.show_settings('awake'))
         self.awake_menu.error.connect(lambda m: self.tray.showMessage('Keep awake', m, QSystemTrayIcon.Warning, 5000))
         self.widget.awake_requested.connect(lambda pos: self.awake_menu.popup(pos))
         menu.addMenu(self.awake_menu)
-        menu.addSeparator()
-        self.act_lock = self.check_action('Lock position', 'locked')
-        self.act_click = self.check_action('Click-through', 'click_through')
-        self.act_top = self.check_action('Always on top', 'always_on_top')
-        look = menu.addMenu('Look')
-        look_group = QActionGroup(look)
-        self.act_style = {}
-        for value, text in (('poster', 'Poster'), ('card', 'Card')):
-            action = QAction(text, look, checkable=True)
-            action.setChecked(self.settings['style'] == value)
-            action.triggered.connect(lambda _=False, v=value: self.set_layout(v, 'style'))
-            look_group.addAction(action)
-            look.addAction(action)
-            self.act_style[value] = action
-        layout = self.layout_menu = menu.addMenu('Layout')
-        group = QActionGroup(layout)
-        self.act_layout = {}
-        for value, text in (('horizontal', 'Horizontal strip'), ('vertical', 'Vertical stand')):
-            action = QAction(text, layout, checkable=True)
-            action.setChecked(self.settings['orientation'] == value)
-            action.triggered.connect(lambda _=False, v=value: self.set_layout(v))
-            group.addAction(action)
-            layout.addAction(action)
-            self.act_layout[value] = action
         menu.addSeparator()
         self.act_helper = menu.addAction('Start sensor helper (administrator)…', self.toggle_helper)
         self.act_setup = menu.addAction('Set up automatic CPU sensors (one-time)…', self.host.setup_task)
@@ -161,6 +186,80 @@ class PrismMonitor:
         self.tray.messageClicked.connect(self.tray_message_clicked)
         self.tray.show()
 
+    def radio_menu(self, menu, key, choices, apply):
+        group = QActionGroup(menu)
+        actions = {}
+        for value, text in choices:
+            action = QAction(text, menu, checkable=True)
+            action.triggered.connect(lambda _=False, v=value: apply(v))
+            group.addAction(action)
+            menu.addAction(action)
+            actions[value] = action
+        return actions
+
+    def colour_menu(self, menu, key, choices, title):
+        """Preset colours with swatches, then Custom… with a colour picker."""
+        group = QActionGroup(menu)
+        actions = {}
+        for name, value in choices:
+            action = QAction(name, menu, checkable=True)
+            if value:
+                swatch = QPixmap(14, 14)
+                swatch.fill(QColor(value))
+                action.setIcon(QIcon(swatch))
+            action.triggered.connect(lambda _=False, v=value: self.set_and_apply(key, v))
+            group.addAction(action)
+            menu.addAction(action)
+            actions[value] = action
+        custom = QAction('Custom…', menu, checkable=True)
+        custom.triggered.connect(lambda _=False: self.pick_colour(key, title))
+        group.addAction(custom)
+        menu.addAction(custom)
+        actions['custom'] = custom
+        return actions
+
+    def font_choices(self, menu):
+        """Preset fonts, each shown in its own typeface, then Other… with the font picker."""
+        group = QActionGroup(menu)
+        actions = {}
+        P.load_fonts()
+        for name, family in P.FONTS:
+            action = QAction(name, menu, checkable=True)
+            action.setFont(P.font(15, family=family))
+            action.triggered.connect(lambda _=False, f=family: self.set_and_apply('poster_font', f))
+            group.addAction(action)
+            menu.addAction(action)
+            actions[family] = action
+        other = QAction('Other…', menu, checkable=True)
+        other.triggered.connect(self.pick_font)
+        group.addAction(other)
+        menu.addAction(other)
+        actions['other'] = other
+        return actions
+
+    def pick_font(self):
+        ok, chosen = QFontDialog.getFont(P.font(16, family=self.settings['poster_font']), None, 'Poster font')
+        if ok:
+            self.set_and_apply('poster_font', chosen.family())
+        else:
+            self.sync_menu()
+
+    def pick_colour(self, key, title):
+        start = QColor(self.settings[key] or ('#ffffff' if key == 'poster_text' else '#8fd8ff'))
+        color = QColorDialog.getColor(start, None, title)
+        if color.isValid():
+            self.set_and_apply(key, color.name())
+        else:
+            self.sync_menu()
+
+    def show_section(self, section, on):
+        """Show or hide a whole Poster section (FPS, system, fans, batteries) from the menu."""
+        keys = SECTIONS[section]
+        visible = [k for k in self.settings['visible'] if k not in keys]
+        if on:
+            visible += [k for k in keys]
+        self.set_and_apply('visible', visible)
+
     def check_action(self, text, key):
         action = QAction(text, self.menu, checkable=True)
         action.setChecked(self.settings[key])
@@ -170,15 +269,39 @@ class PrismMonitor:
 
     def sync_menu(self):
         self.act_show.setText('Hide widget' if self.widget.isVisible() else 'Show widget')
-        for action, key in ((self.act_lock, 'locked'), (self.act_click, 'click_through'), (self.act_top, 'always_on_top')):
+        for value, action in self.act_layer.items():
+            action.setChecked(self.settings['layer'] == value)
+        for action, key in ((self.act_lock, 'locked'), (self.act_click, 'click_through'),
+                            (self.act_login, 'launch_at_login')):
             action.blockSignals(True)
             action.setChecked(self.settings[key])
             action.blockSignals(False)
-        for value, action in self.act_layout.items():
-            action.setChecked(self.settings['orientation'] == value)
-        for value, action in self.act_style.items():
-            action.setChecked(self.settings['style'] == value)
-        self.layout_menu.setEnabled(self.settings['style'] == 'card')
+        visible = set(self.settings['visible'])
+        for section, action in self.act_sections.items():
+            action.setChecked(bool(visible & set(SECTIONS[section])))
+        for key, actions in (('style', self.act_style), ('poster_hero', self.act_hero), ('orientation', self.act_layout)):
+            for value, action in actions.items():
+                action.setChecked(self.settings[key] == value)
+        for value, action in self.act_size.items():
+            action.setChecked(abs(self.settings['scale'] - value) < 0.01)
+        for value, action in self.act_backdrop.items():
+            action.setChecked(abs(self.settings['poster_opacity'] - value) < 0.01)
+        poster = self.settings['style'] == 'poster'
+        self.hero_menu.menuAction().setVisible(poster)
+        self.size_menu.menuAction().setVisible(poster)
+        self.backdrop_menu.menuAction().setVisible(poster)
+        self.text_menu.menuAction().setVisible(poster)
+        self.font_menu.menuAction().setVisible(poster)
+        family = self.settings['poster_font']
+        for choice, action in self.act_font.items():
+            action.setChecked(choice == family or (choice == 'other' and family not in self.act_font))
+        self.act_font['other'].setText(f'Other… ({family})' if family and family not in self.act_font else 'Other…')
+        self.number_menu.menuAction().setVisible(poster)
+        for key, actions in (('poster_text', self.act_text), ('poster_accent', self.act_number)):
+            value = self.settings[key]
+            for choice, action in actions.items():
+                action.setChecked(choice == value or (choice == 'custom' and value not in actions))
+        self.layout_menu.menuAction().setVisible(not poster)
         connected = self.host.state in ('connected', 'starting')
         automatic = self.settings['helper_task']
         self.act_helper.setText('Stop sensor helper' if connected else
@@ -189,6 +312,13 @@ class PrismMonitor:
                                else 'Update CPU sensor helper…')
         self.act_setup.setVisible(not automatic or status != 'ready')
         self.act_setup.setEnabled(self.host.state != 'setup')
+
+    def system_theme_changed(self, *_):
+        if self.settings['theme'] == 'system':
+            self.widget.signature = None
+            self.widget.relayout()
+            self.widget.update()
+            self.settings_window.restyle()
 
     def set_layout(self, value, key='orientation'):
         """Switch between the horizontal strip and the vertical stand, or between the
@@ -309,7 +439,9 @@ class PrismMonitor:
     def setting_changed(self, key):
         s = self.settings
         old = QRect(self.widget.pos(), self.widget.size())
-        if key in ('always_on_top', 'click_through'):
+        if key == 'layer':
+            s['always_on_top'] = s['layer'] == 'top'
+        if key in ('always_on_top', 'click_through', 'layer'):
             self.widget.apply_flags()
             if key == 'click_through' and s['click_through']:
                 self.tray.showMessage(APP_NAME, 'Click-through is on. Use the tray icon menu to turn it off.',
@@ -548,8 +680,8 @@ def main(argv=None):
                 monitor.widget.grab().save(args.grab)
                 monitor.show_settings()
                 monitor.settings_window.refresh_live()
-                for i in range(monitor.settings_window.findChild(__import__('PySide6.QtWidgets', fromlist=['QTabWidget']).QTabWidget).count()):
-                    tabs = monitor.settings_window.findChild(__import__('PySide6.QtWidgets', fromlist=['QTabWidget']).QTabWidget)
+                tabs = monitor.settings_window.tabs
+                for i in range(tabs.count()):
                     tabs.setCurrentIndex(i)
                     app.processEvents()
                     monitor.settings_window.grab().save(args.grab.replace('.png', f'-settings{i}.png'))

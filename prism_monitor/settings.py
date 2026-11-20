@@ -12,13 +12,17 @@ from .model import BY_KEY, DEFAULT_VISIBLE, METRICS
 LEGACY_METRICS = tuple(m.key for m in METRICS if m.key != 'battery')
 
 DEFAULTS = {
-    'theme': 'dark',                 # dark | midnight | light
+    'theme': 'dark',                 # dark | midnight | light | system (follows Windows light/dark mode)
     'accent': '#7c9cff',
     'font_size': 10,                 # pt, base text size
     'opacity': 0.82,                 # background opacity 0.2–1.0
     'scale': 1.0,                    # 0.6–2.0
     'style': 'poster',               # poster (no panel, like the Still clock) | card
-    'poster_hero': 'cpu',            # big number in the Poster look when no game runs: cpu | gpu
+    'poster_opacity': 0.0,           # Poster backdrop panel 0 (none, like the Still clock) – 1.0
+    'poster_hero': 'cpu',
+    'poster_font': '',               # Poster font family, '' = the bundled Barlow
+    'poster_text': '',               # Poster lettering colour, '' = automatic for the theme
+    'poster_accent': '',             # Poster big number and captions, '' = automatic (light blue)            # big number in the Poster look when no game runs: cpu | gpu
     'orientation': 'horizontal',     # horizontal | vertical (Card look)
     'graphs': True,
     'header': True,                  # title bar with clock and keep-awake button
@@ -29,7 +33,8 @@ DEFAULTS = {
     'battery_wake_bt': True,         # switch Bluetooth PlayStation controllers to the report that carries battery
     'fans_visible': None,            # None = fans reporting > 0 rpm when first seen
     'interval': 1.0,                 # seconds
-    'always_on_top': True,
+    'always_on_top': True,           # kept in step with 'layer' for older versions
+    'layer': 'top',                  # top: over windows | normal | behind: under every window, on the desktop
     'locked': False,
     'click_through': False,
     'launch_at_login': False,
@@ -73,11 +78,18 @@ def validate(data):
     for key, default in DEFAULTS.items():
         if key in data:
             out[key] = data[key]
-    out['theme'] = out['theme'] if out['theme'] in ('dark', 'midnight', 'light') else 'dark'
+    out['theme'] = out['theme'] if out['theme'] in ('dark', 'midnight', 'light', 'system') else 'dark'
     accent = str(out['accent'])
     out['accent'] = accent if len(accent) == 7 and accent.startswith('#') else DEFAULTS['accent']
     out['font_size'] = _clamp(out['font_size'], 7, 20, 10)
     out['opacity'] = _clamp(out['opacity'], 0.2, 1.0, 0.82)
+    out['poster_opacity'] = _clamp(out['poster_opacity'], 0.0, 1.0, 0.0)
+    out['poster_font'] = str(out['poster_font'] or '')[:64]
+    if out['layer'] not in ('top', 'normal', 'behind') or 'layer' not in data:
+        out['layer'] = 'top' if data.get('always_on_top', True) else 'normal'
+    for key in ('poster_text', 'poster_accent'):
+        value = str(out[key] or '')
+        out[key] = value.lower() if len(value) == 7 and value.startswith('#') else ''
     out['scale'] = _clamp(out['scale'], 0.6, 2.0, 1.0)
     # Settings saved before the Poster look existed keep the Card look they had.
     out['style'] = out['style'] if 'style' in data and out['style'] in ('poster', 'card') else 'card'
@@ -137,3 +149,28 @@ class Settings:
         tmp = self.path.with_suffix('.tmp')
         tmp.write_text(json.dumps(self.data, indent=2), encoding='utf-8')
         os.replace(tmp, self.path)
+
+
+def resolve_theme(name):
+    """The theme to draw with: 'system' becomes light or dark from the Windows app mode."""
+    if name != 'system':
+        return name
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        hints = QGuiApplication.styleHints()
+        if hints.colorScheme() == Qt.ColorScheme.Light:
+            return 'light'
+        if hints.colorScheme() == Qt.ColorScheme.Dark:
+            return 'dark'
+    except (ImportError, AttributeError, RuntimeError):
+        pass
+    if sys.platform == 'win32':   # no answer from Qt (e.g. offscreen): ask Windows directly
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize') as key:
+                return 'light' if winreg.QueryValueEx(key, 'AppsUseLightTheme')[0] else 'dark'
+        except OSError:
+            pass
+    return 'dark'

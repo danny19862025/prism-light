@@ -534,3 +534,32 @@ def shutdown_now():
     subprocess.Popen([exe, '/s', '/t', '0'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     return True
+
+
+WM_WINDOWPOSCHANGING = 0x0046
+SWP_NOZORDER = 0x0004
+HWND_BOTTOM = 1
+
+
+def keep_at_bottom(message):
+    """In a native message hook: rewrite a z-order change of this window to HWND_BOTTOM."""
+    import ctypes
+    from ctypes import wintypes
+
+    class MSG(ctypes.Structure):
+        _fields_ = [('hwnd', wintypes.HWND), ('message', wintypes.UINT), ('wParam', wintypes.WPARAM),
+                    ('lParam', wintypes.LPARAM), ('time', wintypes.DWORD), ('pt', wintypes.POINT)]
+
+    class WINDOWPOS(ctypes.Structure):
+        _fields_ = [('hwnd', wintypes.HWND), ('hwndInsertAfter', wintypes.HWND), ('x', ctypes.c_int),
+                    ('y', ctypes.c_int), ('cx', ctypes.c_int), ('cy', ctypes.c_int), ('flags', wintypes.UINT)]
+
+    try:
+        msg = MSG.from_address(int(message))
+        if msg.message != WM_WINDOWPOSCHANGING or not msg.lParam:
+            return
+        pos = WINDOWPOS.from_address(msg.lParam)
+        if not pos.flags & SWP_NOZORDER:
+            pos.hwndInsertAfter = HWND_BOTTOM
+    except (ValueError, OSError):
+        pass

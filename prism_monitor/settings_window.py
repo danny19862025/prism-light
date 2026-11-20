@@ -3,13 +3,17 @@
 import datetime
 
 from PySide6.QtCore import Qt, QTime, QTimer, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFontComboBox,
+                               QFormLayout,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
-                               QSlider, QSpinBox, QStackedWidget, QTabWidget, QTimeEdit, QVBoxLayout, QWidget)
+                               QSlider, QSpinBox, QStackedWidget, QTimeEdit, QVBoxLayout, QWidget)
 
+from . import __version__
 from .awake import AFTER, MODES
 from .model import GROUPS, METRICS
+from .settings import resolve_theme
+from .ui_kit import AboutPage, SideTabs, add_glow
 
 STYLE = {
     'dark': ('#12141c', '#1b1e29', '#262a38', '#eef1f8', '#8e97ab'),
@@ -20,32 +24,64 @@ STYLE = {
 
 def stylesheet(theme, accent):
     bg, panel, line, text, dim = STYLE.get(theme, STYLE['dark'])
-    return f'''
-    QWidget {{ background: {bg}; color: {text}; font-family: "Segoe UI Variable Text", "Segoe UI"; font-size: 10pt; }}
-    QTabWidget::pane {{ border: 1px solid {line}; border-radius: 10px; background: {panel}; top: -1px; }}
-    QTabBar::tab {{ background: transparent; color: {dim}; padding: 7px 14px; border: none; margin-right: 2px; }}
-    QTabBar::tab:selected {{ color: {text}; border-bottom: 2px solid {accent}; }}
-    QTabBar::tab:hover {{ color: {text}; }}
-    QGroupBox {{ background: {panel}; border: 1px solid {line}; border-radius: 8px; margin-top: 14px; padding: 8px; }}
-    QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; color: {accent}; font-weight: 600; }}
+    acc = QColor(accent)
+    acc_hi, acc_lo = acc.lighter(118).name(), acc.darker(112).name()
+    soft = f'rgba({acc.red()}, {acc.green()}, {acc.blue()}, 38)'
+    rim = f'rgba({acc.red()}, {acc.green()}, {acc.blue()}, 120)'
+    side = QColor(bg).darker(118).name() if theme != 'light' else '#e9ebf2'
+    return f"""
+    QWidget {{ background: {bg}; color: {text}; font-family: "Segoe UI Variable Text", "Segoe UI"; font-size: 10.5pt; }}
+    QListWidget#sidebar {{ background: {side}; border: none; border-right: 1px solid {line}; padding: 14px 10px;
+                           outline: none; font-size: 11pt; }}
+    QListWidget#sidebar::item {{ color: {dim}; padding: 0 14px; margin: 2px 0; border-radius: 9px;
+                                 border-left: 3px solid transparent; }}
+    QListWidget#sidebar::item:hover {{ background: {line}; color: {text}; }}
+    QListWidget#sidebar::item:selected {{ background: {soft}; color: {text}; border-left: 3px solid {accent};
+                                          font-weight: 600; }}
+    QWidget#pagearea, QStackedWidget#pages {{ background: {bg}; }}
+    QScrollArea#pagescroll, QScrollArea#pagescroll > QWidget > QWidget {{ background: {bg}; }}
+    QLabel#pagetitle {{ font-size: 17pt; font-weight: 600; padding-bottom: 4px; }}
+    QLabel#abouttitle {{ font-size: 22pt; font-weight: 700; color: {text}; }}
+    QGroupBox {{ background: {panel}; border: 1px solid {line}; border-radius: 10px; margin-top: 16px; padding: 10px; }}
+    QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; color: {accent}; font-weight: 600; }}
     QLabel, QStackedWidget {{ background: transparent; }}
     QLabel#hint {{ color: {dim}; }}
-    QCheckBox, QRadioButton {{ background: transparent; spacing: 7px; }}
-    QPushButton {{ background: {line}; border: 1px solid {line}; border-radius: 6px; padding: 5px 12px; }}
-    QPushButton:hover {{ border-color: {accent}; }}
-    QPushButton#primary {{ background: {accent}; color: {bg}; border-color: {accent}; font-weight: 600; }}
+    QCheckBox, QRadioButton {{ background: transparent; spacing: 8px; }}
+    QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid {line}; background: {panel}; }}
+    QCheckBox::indicator:hover {{ border-color: {accent}; }}
+    QCheckBox::indicator:checked {{ background: {accent}; border-color: {accent}; }}
+    QPushButton {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {panel}, stop:1 {line});
+                   border: 1px solid {line}; border-radius: 9px; padding: 7px 16px; }}
+    QPushButton:hover {{ border-color: {rim}; color: {text}; }}
+    QPushButton:pressed {{ background: {line}; }}
+    QPushButton:disabled {{ color: {dim}; border-color: {line}; }}
+    QPushButton#primary {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {acc_hi}, stop:1 {acc_lo});
+                           color: {bg}; border: 1px solid {accent}; font-weight: 600; }}
+    QPushButton#ghost {{ background: transparent; border: 1px solid {line}; color: {text}; }}
+    QPushButton#ghost:hover {{ border-color: {rim}; }}
+    QPushButton#coffee {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FFE24D, stop:1 #FFD000);
+                          color: #0d0c22; border: none; border-radius: 12px; font-weight: 700; font-size: 11.5pt;
+                          padding: 10px 22px; }}
+    QPushButton#coffee:hover {{ background: #FFE766; }}
     QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit, QTimeEdit, QListWidget {{
-        background: {bg}; border: 1px solid {line}; border-radius: 6px; padding: 3px 6px;
+        background: {panel}; border: 1px solid {line}; border-radius: 8px; padding: 5px 8px;
         selection-background-color: {accent}; selection-color: {bg}; }}
+    QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QLineEdit:hover, QTimeEdit:hover {{ border-color: {rim}; }}
     QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus, QTimeEdit:focus {{ border-color: {accent}; }}
     QComboBox QAbstractItemView {{ background: {panel}; border: 1px solid {line}; }}
-    QSlider::groove:horizontal {{ height: 4px; background: {line}; border-radius: 2px; }}
-    QSlider::sub-page:horizontal {{ background: {accent}; border-radius: 2px; }}
-    QSlider::handle:horizontal {{ background: {text}; width: 14px; margin: -6px 0; border-radius: 7px; }}
-    QLabel#status {{ background: {bg}; border: 1px solid {line}; border-left: 3px solid {accent};
-                     border-radius: 6px; padding: 8px; }}
-    QToolTip {{ background: {panel}; color: {text}; border: 1px solid {line}; }}
-    '''
+    QSlider::groove:horizontal {{ height: 6px; background: {line}; border-radius: 3px; }}
+    QSlider::sub-page:horizontal {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {acc_lo}, stop:1 {acc_hi});
+                                    border-radius: 3px; }}
+    QSlider::handle:horizontal {{ background: {text}; width: 16px; margin: -6px 0; border-radius: 8px;
+                                  border: 2px solid {accent}; }}
+    QLabel#status {{ background: {panel}; border: 1px solid {line}; border-left: 3px solid {accent};
+                     border-radius: 8px; padding: 10px; }}
+    QScrollBar:vertical {{ background: transparent; width: 10px; }}
+    QScrollBar::handle:vertical {{ background: {line}; border-radius: 5px; min-height: 30px; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+    QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+    QToolTip {{ background: {panel}; color: {text}; border: 1px solid {line}; padding: 4px; }}
+    """
 
 FPS_NOTES = (
     '<b>How FPS is measured.</b> Intel PresentMon reads the present events Windows already logs (Event Tracing for '
@@ -74,9 +110,9 @@ class SettingsWindow(QWidget):
         self.tracker = tracker
         self.awake = awake
         self.setWindowTitle('Prism Monitor settings')
-        self.setMinimumWidth(520)
-        self.tabs = tabs = QTabWidget()
-        tabs.setDocumentMode(False)
+        self.setMinimumSize(820, 600)
+        self.resize(960, 700)
+        self.tabs = tabs = SideTabs()
         if awake is not None:
             tabs.addTab(self.awake_tab(), 'Keep awake')
         tabs.addTab(self.appearance_tab(), 'Appearance')
@@ -84,17 +120,22 @@ class SettingsWindow(QWidget):
         tabs.addTab(self.behaviour_tab(), 'Behaviour')
         tabs.addTab(self.fps_tab(), 'Game FPS')
         tabs.addTab(self.sensors_tab(), 'Sensors')
+        self.about = AboutPage(settings['accent'], __version__)
+        tabs.addTab(self.about, 'About')
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(tabs)
         self.restyle()
         self.refresh = QTimer(self, interval=1500, timeout=self.refresh_live)
 
     def restyle(self):
-        self.setStyleSheet(stylesheet(self.settings['theme'], self.settings['accent']))
+        self.setStyleSheet(stylesheet(resolve_theme(self.settings['theme']), self.settings['accent']))
+        add_glow(self, self.settings['accent'])
+        if hasattr(self, 'about'):
+            self.about.set_accent(self.settings['accent'])
 
     def show_tab(self, name):
-        titles = {'awake': 'Keep awake', 'fps': 'Game FPS', 'sensors': 'Sensors'}
+        titles = {'awake': 'Keep awake', 'fps': 'Game FPS', 'sensors': 'Sensors', 'about': 'About'}
         for i in range(self.tabs.count()):
             if self.tabs.tabText(i) == titles.get(name, name):
                 self.tabs.setCurrentIndex(i)
@@ -123,6 +164,7 @@ class SettingsWindow(QWidget):
         theme.addItem('Dark', 'dark')
         theme.addItem('Midnight', 'midnight')
         theme.addItem('Light', 'light')
+        theme.addItem('System (follow Windows light/dark mode)', 'system')
         theme.setCurrentIndex(max(0, theme.findData(self.settings['theme'])))
         theme.currentIndexChanged.connect(lambda: self.set('theme', theme.currentData()))
         form.addRow('Theme', theme)
@@ -145,6 +187,7 @@ class SettingsWindow(QWidget):
         hero.currentIndexChanged.connect(lambda: self.set('poster_hero', hero.currentData()))
         form.addRow('Big number', hero)
         self.card_only = []
+        self.poster_only = []
         self.orientation = orientation = QComboBox()
         orientation.addItem('Horizontal strip', 'horizontal')
         orientation.addItem('Vertical stand', 'vertical')
@@ -157,8 +200,46 @@ class SettingsWindow(QWidget):
         form.addRow('Font size', font)
         opacity = self.slider(20, 100, round(self.settings['opacity'] * 100), '%', lambda v: self.set('opacity', v / 100))
         form.addRow('Background opacity', opacity)
-        form.addRow('Widget scale', self.slider(60, 200, round(self.settings['scale'] * 100), '%',
-                                                lambda v: self.set('scale', v / 100)))
+        backdrop = self.slider(0, 100, round(self.settings['poster_opacity'] * 100), '%',
+                               lambda v: self.set('poster_opacity', v / 100))
+        backdrop.setToolTip('A dark panel behind the Poster lettering. 0% is no panel, like the Still clock.')
+        self.backdrop_slider = backdrop.findChild(QSlider)   # also set by the menu
+        form.addRow('Poster background', backdrop)
+        font_row = QWidget()
+        line = QHBoxLayout(font_row)
+        line.setContentsMargins(0, 0, 0, 0)
+        self.font_combo = QFontComboBox()
+        self.font_combo.setEditable(False)
+        self.font_combo.setToolTip('The typeface of the Poster look. Barlow is the bundled font of the Still clock.')
+        self.font_combo.currentFontChanged.connect(
+            lambda f: self.set('poster_font', '' if f.family() == 'Barlow' else f.family()))
+        barlow = QPushButton('Barlow')
+        barlow.setToolTip('Back to the bundled Barlow font.')
+        barlow.clicked.connect(lambda: (self.set('poster_font', ''), self.sync_font()))
+        line.addWidget(self.font_combo, 1)
+        line.addWidget(barlow)
+        self.poster_only.append(font_row)
+        form.addRow('Poster font', font_row)
+        self.sync_font()
+        self.colour_buttons = {}
+        for key, label in (('poster_text', 'Poster text colour'), ('poster_accent', 'Poster number colour')):
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
+            button = QPushButton()
+            button.clicked.connect(lambda _=False, k=key, t=label: self.pick_poster_colour(k, t))
+            auto = QPushButton('Automatic')
+            auto.setToolTip('White lettering and a light-blue number (dark on the Light theme).')
+            auto.clicked.connect(lambda _=False, k=key: (self.set(k, ''), self.paint_colours()))
+            line.addWidget(button, 1)
+            line.addWidget(auto)
+            self.colour_buttons[key] = button
+            self.poster_only.append(row)
+            form.addRow(label, row)
+        self.paint_colours()
+        scale = self.slider(60, 200, round(self.settings['scale'] * 100), '%', lambda v: self.set('scale', v / 100))
+        self.scale_slider = scale.findChild(QSlider)   # also set by the menu's Size
+        form.addRow('Widget scale', scale)
         self.card_only += [orientation, opacity]
         for key, text in (('header', 'Show the title bar (clock and keep-awake button)'),
                           ('color_levels', 'Colour hot temperatures and near-full memory amber/red')):
@@ -185,6 +266,9 @@ class SettingsWindow(QWidget):
         for widget in self.card_only:
             widget.setEnabled(not poster)
         self.hero_combo.setEnabled(poster)
+        self.backdrop_slider.parentWidget().setEnabled(poster)
+        for widget in self.poster_only:
+            widget.setEnabled(poster)
 
     def slider(self, low, high, value, suffix, apply):
         box = QWidget()
@@ -203,6 +287,31 @@ class SettingsWindow(QWidget):
         self.accent_button.setText(color.upper())
         text = '#000' if QColor(color).lightness() > 140 else '#fff'
         self.accent_button.setStyleSheet(f'background:{color};color:{text};padding:4px 12px;border-radius:4px')
+
+    def sync_font(self):
+        from .poster import load_fonts
+        load_fonts()
+        self.font_combo.blockSignals(True)
+        self.font_combo.setCurrentFont(QFont(self.settings['poster_font'] or 'Barlow'))
+        self.font_combo.blockSignals(False)
+
+    def paint_colours(self):
+        for key, button in self.colour_buttons.items():
+            value = self.settings[key]
+            if not value:
+                button.setText('Automatic')
+                button.setStyleSheet('')
+                continue
+            text = '#000' if QColor(value).lightness() > 140 else '#fff'
+            button.setText(value.upper())
+            button.setStyleSheet(f'background:{value};color:{text};padding:4px 12px;border-radius:4px')
+
+    def pick_poster_colour(self, key, title):
+        start = QColor(self.settings[key] or ('#ffffff' if key == 'poster_text' else '#8fd8ff'))
+        color = QColorDialog.getColor(start, self, title)
+        if color.isValid():
+            self.set(key, color.name())
+            self.paint_colours()
 
     def pick_accent(self):
         color = QColorDialog.getColor(QColor(self.settings['accent']), self, 'Accent colour')
@@ -268,7 +377,16 @@ class SettingsWindow(QWidget):
         interval.valueChanged.connect(lambda v: self.set('interval', v))
         form.addRow('Polling interval', interval)
         self.checks = {}
-        for key, text in (('always_on_top', 'Always on top'), ('locked', 'Lock position'),
+        self.layer_combo = layer = QComboBox()
+        for value, text in (('top', 'On top of windows (see it over games)'), ('normal', 'Normal window'),
+                            ('behind', 'Behind windows (on the desktop, like a clock)')):
+            layer.addItem(text, value)
+        layer.setToolTip('Behind windows: every window, including newly opened ones, covers the widget. '
+                         'Also in the right-click menu: Widget position.')
+        layer.setCurrentIndex(max(0, layer.findData(self.settings['layer'])))
+        layer.currentIndexChanged.connect(lambda: self.set('layer', layer.currentData()))
+        form.addRow('Widget position', layer)
+        for key, text in (('locked', 'Lock position'),
                           ('click_through', 'Click-through (turn off from the tray icon)'),
                           ('launch_at_login', 'Launch at login'),
                           ('helper_autostart', 'Start the sensor helper on launch (shows the administrator prompt)')):
@@ -291,6 +409,20 @@ class SettingsWindow(QWidget):
         self.orientation.blockSignals(True)
         self.orientation.setCurrentIndex(self.orientation.findData(self.settings['orientation']))
         self.orientation.blockSignals(False)
+        for key, check in self.metric_boxes.items():   # sections can be switched from the menu
+            check.blockSignals(True)
+            check.setChecked(key in self.settings['visible'])
+            check.blockSignals(False)
+        self.hero_combo.blockSignals(True)
+        self.hero_combo.setCurrentIndex(self.hero_combo.findData(self.settings['poster_hero']))
+        self.hero_combo.blockSignals(False)
+        self.backdrop_slider.setValue(round(self.settings['poster_opacity'] * 100))
+        self.paint_colours()
+        self.sync_font()
+        self.scale_slider.setValue(round(self.settings['scale'] * 100))   # same value: set() is a no-op
+        self.layer_combo.blockSignals(True)
+        self.layer_combo.setCurrentIndex(self.layer_combo.findData(self.settings['layer']))
+        self.layer_combo.blockSignals(False)
         self.style_combo.blockSignals(True)
         self.style_combo.setCurrentIndex(self.style_combo.findData(self.settings['style']))
         self.style_combo.blockSignals(False)

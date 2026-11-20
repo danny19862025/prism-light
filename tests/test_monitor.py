@@ -163,6 +163,19 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(validate({'theme': 'midnight'})['style'], 'card')   # saved before Poster existed
         self.assertEqual(validate({'style': 'poster', 'poster_hero': 'x'})['poster_hero'], 'cpu')
         self.assertEqual(validate({'style': 'bogus'})['style'], 'card')
+        self.assertEqual(DEFAULTS['poster_opacity'], 0.0)                     # no panel by default
+        self.assertEqual(DEFAULTS['layer'], 'top')
+        self.assertEqual(validate({'always_on_top': False})['layer'], 'normal')   # saved before 'layer' existed
+        self.assertEqual(validate({'always_on_top': True})['layer'], 'top')
+        self.assertEqual(validate({'layer': 'behind'})['layer'], 'behind')
+        self.assertEqual(validate({'layer': 'sideways'})['layer'], 'top')
+        self.assertEqual(validate({'theme': 'system'})['theme'], 'system')
+        from prism_monitor.settings import resolve_theme
+        self.assertIn(resolve_theme('system'), ('light', 'dark'))
+        self.assertEqual(resolve_theme('midnight'), 'midnight')
+        self.assertEqual(validate({'poster_opacity': 7})['poster_opacity'], 1.0)
+        self.assertEqual(validate({'poster_text': '#FFB3D1', 'poster_accent': 'red'})['poster_text'], '#ffb3d1')
+        self.assertEqual(validate({'poster_accent': 'red'})['poster_accent'], '')
 
     def test_round_trip_and_corrupt_file(self):
         with tempfile.TemporaryDirectory() as d:
@@ -303,7 +316,9 @@ class PosterTests(QtTestCase):
             self.assertEqual([g.caption for g in c.groups], ['SYSTEM', 'FANS', 'BATTERIES'])
             system = {r.label: r for r in c.groups[0].rows}
             self.assertEqual(system['GPU'].value, '92% · 70°C')
-            self.assertIsNotNone(system['GPU'].color)                     # 92% load is a warning
+            self.assertIsNotNone(system['GPU'].color)                     # 70°C: amber, as on Linux
+            self.assertNotIn('VRAM', system)                               # Linux sections only
+            self.assertIsNotNone(c.groups[2].rows[0].color)               # 35% battery: amber
             self.assertNotIn('CPU', system)                                # the hero already shows it
             self.assertAlmostEqual(c.groups[2].rows[0].level, 0.35)
             w.grab()
@@ -335,6 +350,115 @@ class PosterTests(QtTestCase):
             w.settings['visible'] = [k for k in w.settings['visible'] if k != 'battery']
             w.relayout()
             self.assertLess(w.height(), size.height())                     # rows removed: may shrink
+
+    def test_menu_sections_and_size(self):
+        from prism_monitor.app import SECTIONS, SIZES
+        self.assertEqual(SIZES['Large'], 1.25)
+        self.assertIn('ram_used', SECTIONS['system'])
+
+    def test_background_opacity_draws_a_panel(self):
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            w = self.widget(d)
+            w.update_snapshot(self.snapshot(time.monotonic()))
+            corner = (3, w.height() // 2)          # left edge, beside the vertical caption
+            self.assertLessEqual(w.grab().toImage().pixelColor(*corner).alpha(), 1)
+            w.settings['poster_opacity'] = 0.5
+            self.assertAlmostEqual(w.grab().toImage().pixelColor(*corner).alpha(), 128, delta=4)
+
+    def test_text_and_number_colours(self):
+        from prism_monitor import poster as P
+        ink = P.ink_for('dark')
+        self.assertEqual((ink.text.name(), ink.accent.name()), ('#ffffff', '#8fd8ff'))
+        ink = P.ink_for('dark', '#ffb3d1', '#ff7a7a')
+        self.assertEqual((ink.text.name(), ink.accent.name()), ('#ffb3d1', '#ff7a7a'))
+        self.assertLess(ink.shadow.lightness(), 128)                       # light text: dark shadow
+        self.assertGreater(P.ink_for('dark', '#141821').shadow.lightness(), 128)   # dark text: light halo
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            w = self.widget(d)
+            w.update_snapshot(self.snapshot(time.monotonic()))
+            w.settings['poster_text'] = '#ffb3d1'
+            self.assertEqual(w.poster_ink().text.name(), '#ffb3d1')
+            w.grab()
+
+    def test_settings_sidebar_and_about(self):
+        from prism_monitor.settings_window import SettingsWindow
+        from prism_monitor.ui_kit import DONATE_URL, Glow
+        with tempfile.TemporaryDirectory() as d:
+            settings = Settings(Path(d) / 's.json')
+            w = SettingsWindow(settings, FrameTracker(own_pid=999))
+            titles = [w.tabs.tabText(i) for i in range(w.tabs.count())]
+            self.assertEqual(titles[-1], 'About')
+            w.show_tab('about')
+            self.assertIs(w.tabs.currentWidget(), w.about)
+            self.assertEqual(DONATE_URL, 'https://buymeacoffee.com/danny1986')
+            self.assertGreaterEqual(w.width(), 820)
+            self.assertTrue(w.findChildren(Glow))                     # buttons glow on hover
+            self.assertIsNone(w.about.coffee.graphicsEffect())        # glow is painted around it: no flicker
+            self.assertIsNone(w.about.coffee.findChild(Glow))
+            w.grab()
+
+    def test_update_check_picks_newest_monitor_release(self):
+        from prism_monitor.updates import compare, latest_release
+        releases = [{'tag_name': 'prism-light-v2.0.0', 'html_url': 'light'},
+                    {'tag_name': 'prism-monitor-v1.0.10', 'html_url': 'u10'},
+                    {'tag_name': 'prism-monitor-v1.0.9', 'html_url': 'u9'},
+                    {'tag_name': 'prism-monitor-v2.0.0', 'html_url': 'beta', 'prerelease': True},
+                    {'tag_name': 'prism-monitor-v3.0.0', 'html_url': 'draft', 'draft': True}]
+        self.assertEqual(latest_release(releases), ('1.0.10', 'u10'))       # numeric, not text, order
+        self.assertEqual(compare('1.0.4', releases)[:2], ('newer', '1.0.10'))
+        self.assertEqual(compare('1.0.10', releases)[0], 'current')
+        self.assertEqual(compare('1.1.0', releases)[0], 'current')          # a build newer than any release
+        self.assertEqual(compare('1.0.4', {'message': 'rate limited'})[0], 'none')
+
+    def test_about_update_states_and_font(self):
+        import time
+        from prism_monitor.settings_window import SettingsWindow
+        with tempfile.TemporaryDirectory() as d:
+            w = self.widget(d)
+            w.update_snapshot(self.snapshot(time.monotonic()))
+            w.settings['poster_font'] = 'Consolas'
+            w.relayout()
+            self.assertEqual(w.poster.family, 'Consolas')
+            win = SettingsWindow(w.settings, FrameTracker(own_pid=999))
+            about = win.about
+            about.update_result('newer', '1.0.9', 'https://example.invalid/r')
+            self.assertFalse(about.download_button.isHidden())
+            self.assertIn('1.0.9', about.update_status.text())
+            about.update_result('current', '1.0.9', '')
+            self.assertIn('latest', about.update_status.text())
+            about.update_result('error', 'offline', '')
+            self.assertIn('offline', about.update_status.text())
+
+    def test_behind_windows_flag(self):
+        from PySide6.QtCore import Qt
+        with tempfile.TemporaryDirectory() as d:
+            w = self.widget(d)
+            w.settings['layer'] = 'behind'
+            w.apply_flags()
+            self.assertTrue(w.windowFlags() & Qt.WindowStaysOnBottomHint)
+            self.assertFalse(w.windowFlags() & Qt.WindowStaysOnTopHint)
+            w.settings['layer'] = 'top'
+            w.apply_flags()
+            self.assertTrue(w.windowFlags() & Qt.WindowStaysOnTopHint)
+
+    def test_system_theme_draws_both_looks(self):
+        from unittest import mock
+        from prism_monitor import widget as widget_module
+        with tempfile.TemporaryDirectory() as d:
+            w = self.widget(d)
+            w.settings['theme'] = 'system'
+            for mode in ('light', 'dark'):
+                with mock.patch.object(widget_module, 'resolve_theme', return_value=mode):
+                    self.assertEqual(w.theme_name(), mode)
+                    self.assertEqual(w.poster_ink().text.name(), '#141821' if mode == 'light' else '#ffffff')
+                    w.grab()
+                    w.settings['style'] = 'card'
+                    w.relayout()
+                    w.grab()
+                    w.settings['style'] = 'poster'
+                    w.relayout()
 
     def test_switching_back_to_card(self):
         with tempfile.TemporaryDirectory() as d:

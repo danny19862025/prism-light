@@ -27,6 +27,12 @@ From source: `.venv\Scripts\python monitor_main.py`. Build the release with `.ve
 
 **Look.** New installs start in the **Poster** look, which matches the Still desktop clock: no panel, bold Barlow lettering with a soft shadow so it reads on any wallpaper, a large faded accent number (CPU or GPU temperature, chosen under **Settings → Appearance → Big number**; FPS while a game runs) with a vertical caption, then compact rows for system, network, disk, fans and batteries. Readings that are not available are left out instead of shown as n/a; hover a row for its source. The widget keeps its width while numbers change and only resizes when rows appear or disappear. Size follows **Widget scale** and **Font size**. **Card** is the earlier dark panel with history graphs, horizontal strip or vertical stand; settings saved before the Poster look existed keep Card. Switch with **Look** in the right-click menu or **Settings → Appearance**.
 
+**Poster options** (right-click menu, or **Settings → Appearance**): **Size** (Small, Medium, Large), **Background opacity** (Off, or a rounded dark panel from 25 % to 100 %), **Font** (the bundled Barlow, Windows fonts such as Bahnschrift or Segoe UI Variable, or any installed font through **Other…**), **Text colour** and **Number colour** (presets or a custom colour; the shadow switches to a light halo for dark text). The sections can be switched on and off from the menu: FPS, CPU / GPU / memory, fans and batteries.
+
+**Widget position** (right-click menu, or **Settings → Behaviour**): **On top of windows** keeps it visible over games, **Normal** behaves like an ordinary window, and **Behind windows** keeps it on the desktop under every window, including ones opened later, like a desktop clock.
+
+**Settings** opens as a window with a sidebar of pages. **About** shows the version, **Check for updates** (asks GitHub for the newest Prism Monitor release only when clicked, and offers the download if it is newer), a link to the source code, and a **Buy me a coffee** button for anyone who would like to support the project.
+
 In the Card look, the title bar at the top of the widget shows the time and a **Keep awake** button (turn it off under **Settings → Appearance**). In the Poster look, Keep awake is in the right-click and tray menu. Temperatures, loads and memory turn amber, then red, as they approach their limits. Themes: Dark, Midnight and Light.
 
 ### Keep awake (like `caffeinate` on a Mac)
