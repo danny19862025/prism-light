@@ -70,6 +70,7 @@ Daemon:
 '''
 
 
+@unittest.skipUnless(sys.platform.startswith('linux'), 'Linux abstract Unix sockets and uids')
 class ReceiverTests(unittest.TestCase):
     def test_present_intervals_per_swapchain(self):
         tracker = FrameTracker(own_pid=999, foreground=lambda: None)

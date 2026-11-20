@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-only
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -53,6 +54,7 @@ class FakeLinux:
         self.tmp.cleanup()
 
 
+@unittest.skipUnless(sys.platform.startswith('linux'), 'fake /sys paths such as intel-rapl:0 are not valid Windows file names')
 class LinuxSystemSourceTest(unittest.TestCase):
     def setUp(self):
         self.fake = FakeLinux()
@@ -87,6 +89,7 @@ class LinuxSystemSourceTest(unittest.TestCase):
         self.assertNotIn('cpu_power', source.read())
 
 
+@unittest.skipUnless(sys.platform.startswith('linux'), 'fake /sys tree with symlinks, which need admin rights on Windows')
 class LinuxGpuSourceTest(unittest.TestCase):
     def test_picks_discrete_amd_card(self):
         with tempfile.TemporaryDirectory() as tmp:
