@@ -1,0 +1,8 @@
+{
+  "uuid": "prism-monitor@prism-light",
+  "name": "Prism Monitor",
+  "description": "Live CPU, GPU, memory, swap, game FPS and battery readings on the desktop, in the Poster look. Needs the Prism Monitor program running (it reads the sensors).",
+  "shell-version": ["45", "46", "47", "48", "49"],
+  "version": 1,
+  "url": ""
+}

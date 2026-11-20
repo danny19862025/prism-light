@@ -159,6 +159,7 @@ class ModelTests(unittest.TestCase):
     def test_format(self):
         gib = 1 << 30
         self.assertEqual(format_value('ram_used', Reading(16.25 * gib, 0, extra=32 * gib)), '16.2/32 GB')
+        self.assertEqual(format_value('swap_used', Reading(0.5 * gib, 0, extra=12 * gib)), '0.5/12 GB')
         self.assertEqual(format_value('cpu_clock', Reading(5067, 0)), '5.07 GHz')
         self.assertEqual(format_value('net_down', Reading(2.5 * (1 << 20), 0)), '2.5 MB/s')
 
@@ -311,7 +312,8 @@ class PosterTests(QtTestCase):
     def snapshot(self, now, cpu_temp=63, fan=980, fps=None):
         readings = {'cpu_temp': Reading(cpu_temp, now, 'lhm'), 'cpu_util': Reading(35, now, 'pdh'),
                     'gpu_temp': Reading(70, now, 'adl'), 'gpu_util': Reading(92, now, 'adl'),
-                    'ram_used': Reading(9.4 * (1 << 30), now, 'windows', 32 * (1 << 30))}
+                    'ram_used': Reading(9.4 * (1 << 30), now, 'windows', 32 * (1 << 30)),
+                    'swap_used': Reading(1.5 * (1 << 30), now, 'pdh', 12 * (1 << 30))}
         if fps:
             readings['fps'] = Reading(fps, now, 'presentmon')
             readings['frametime'] = Reading(1000 / fps, now, 'presentmon')
@@ -341,6 +343,9 @@ class PosterTests(QtTestCase):
             self.assertEqual(system['GPU'].value, '92% · 70°C')
             self.assertIsNotNone(system['GPU'].color)                     # 70°C: amber, as on Linux
             self.assertNotIn('VRAM', system)                               # Linux sections only
+            labels = [r.label for r in c.groups[0].rows]
+            self.assertEqual(labels[labels.index('MEMORY') + 1], 'SWAP')     # swap sits right below memory
+            self.assertEqual(system['SWAP'].value, '1.5 / 12 GB')
             self.assertIsNotNone(c.groups[2].rows[0].color)               # 35% battery: amber
             self.assertNotIn('CPU', system)                                # the hero already shows it
             self.assertAlmostEqual(c.groups[2].rows[0].level, 0.35)
@@ -378,6 +383,7 @@ class PosterTests(QtTestCase):
         from prism_monitor.app import SECTIONS, SIZES
         self.assertEqual(SIZES['Large'], 1.25)
         self.assertIn('ram_used', SECTIONS['system'])
+        self.assertIn('swap_used', SECTIONS['system'])
 
     def test_background_opacity_draws_a_panel(self):
         import time

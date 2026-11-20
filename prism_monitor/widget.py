@@ -31,7 +31,7 @@ THEMES = {
 
 # (warn, hot) thresholds for colouring values by level.
 LEVELS = {'cpu_temp': (75, 88), 'gpu_temp': (75, 85), 'gpu_hotspot': (90, 100), 'cpu_util': (85, 97),
-          'gpu_util': (90, 99), 'ram_used': (80, 92), 'gpu_vram': (85, 95), 'disk_active': (85, 98)}
+          'gpu_util': (90, 99), 'ram_used': (80, 92), 'swap_used': (60, 85), 'gpu_vram': (85, 95), 'disk_active': (85, 98)}
 
 
 def level(key, item):
@@ -43,7 +43,7 @@ def level(key, item):
     if item is None or key not in LEVELS:
         return None
     value = item.value
-    if key in ('ram_used', 'gpu_vram'):
+    if key in ('ram_used', 'swap_used', 'gpu_vram'):
         if not item.extra:
             return None
         value = 100 * item.value / item.extra
@@ -57,6 +57,7 @@ HINTS = {
     'fans': 'Motherboard fan speeds need the sensor helper (administrator) and the PawnIO driver.',
     'fps': 'No presenting game found. Focus the game, or pick its process in Settings → Game FPS.',
     'frametime': 'Frame time comes from the same PresentMon capture as FPS.',
+    'swap_used': 'No swap space is configured (no swap partition, swap file or zram; on Windows, no page file).',
     'battery': 'No device is reporting a battery level right now. Shown automatically: PlayStation controllers '
                '(USB or Bluetooth), Xbox controllers, a laptop battery, and Bluetooth keyboards, mice and headsets '
                'that report their battery to Windows. Keyboards plugged in by cable, and devices on their own '
@@ -391,6 +392,11 @@ class MonitorWidget(QWidget):
             full = item.extra and item.value / item.extra >= 0.9
             system.append(P.Row('MEMORY', text.replace('/', ' / '), self.poster_tone(P.WARN if full else None),
                                 key='ram_used'))
+        text, item = fresh('swap_used')
+        if text:
+            heavy = item.extra and item.value / item.extra >= 0.6
+            system.append(P.Row('SWAP', text.replace('/', ' / '), self.poster_tone(P.WARN if heavy else None),
+                                key='swap_used'))
         if system:
             c.groups.append(P.Group('SYSTEM', system))
         fans = []

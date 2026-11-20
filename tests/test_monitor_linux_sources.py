@@ -21,7 +21,7 @@ class FakeLinux:
         self.proc = Path(self.tmp.name) / 'proc'
         self.set_counters(cpu=(100, 0, 100, 800, 0), net=(1000, 500), disk=(10, 20, 100), energy=1_000_000)
         write(self.proc, 'cpuinfo', 'processor : 0\nmodel name : Test Ryzen 9\n')
-        write(self.proc, 'meminfo', 'MemTotal: 1000 kB\nMemFree: 100 kB\nMemAvailable: 400 kB\n')
+        write(self.proc, 'meminfo', 'MemTotal: 1000 kB\nMemFree: 100 kB\nMemAvailable: 400 kB\nSwapTotal: 2000 kB\nSwapFree: 1500 kB\n')
         write(self.sys, 'devices/system/cpu/cpu0/cpufreq/scaling_cur_freq', '3000000')
         write(self.sys, 'devices/system/cpu/cpu1/cpufreq/scaling_cur_freq', '5000000')
         cpu = 'class/hwmon/hwmon0/'
@@ -73,6 +73,7 @@ class LinuxSystemSourceTest(unittest.TestCase):
         self.assertEqual(source.info['cpu_temp_sensor'], 'Tctl')
         self.assertEqual(out['ram_used'].value, 600 * 1024)
         self.assertEqual(out['ram_used'].extra, 1000 * 1024)
+        self.assertEqual((out['swap_used'].value, out['swap_used'].extra), (500 * 1024, 2000 * 1024))
         self.assertAlmostEqual(out['net_down'].value, 2000.0)   # loopback excluded
         self.assertAlmostEqual(out['net_up'].value, 1000.0)
         self.assertAlmostEqual(out['disk_read'].value, 4096 * 512 / 2)   # loop device excluded

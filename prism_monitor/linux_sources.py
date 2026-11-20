@@ -3,7 +3,7 @@
 
 * LinuxSystemSource: /proc/stat (CPU load), cpufreq (CPU clock), hwmon
   k10temp/zenpower/coretemp (CPU temperature), powercap RAPL (CPU package
-  power), /proc/meminfo (RAM), /proc/net/dev (network), /proc/diskstats
+  power), /proc/meminfo (RAM, swap), /proc/net/dev (network), /proc/diskstats
   (disk), and motherboard fan headers exposed through hwmon.
 * LinuxGpuSource: the amdgpu driver's hwmon and sysfs files (temperatures,
   power, clock, fan, load, VRAM) for the discrete card.
@@ -211,6 +211,9 @@ class LinuxSystemSource:
         total, available = values.get('MemTotal'), values.get('MemAvailable')
         if total and available is not None:
             out['ram_used'] = reading(total - available, SRC, extra=total, now=now)
+        swap, swap_free = values.get('SwapTotal'), values.get('SwapFree')
+        if swap and swap_free is not None:   # no swap configured: left out, not shown as 0
+            out['swap_used'] = reading(max(0, swap - swap_free), SRC, extra=swap, now=now)
 
     def _network(self, out, now):
         nics = self.physical_nics()

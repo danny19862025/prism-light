@@ -134,6 +134,87 @@ class LinuxPlatformTests(unittest.TestCase):
             self.assertFalse(autostart.enabled())
         self.assertEqual(autostart._exec_arg('/a b/"x"'), '"/a b/\\"x\\""')
 
+    @unittest.skipUnless(LINUX, 'XDG autostart is Linux-only')
+    def test_launch_at_login_flag(self):
+        """The installers' --launch-at-login saves the setting and writes the autostart entry."""
+        import subprocess
+        root = Path(__file__).resolve().parent.parent
+        # A private instance name so the test never reaches a Prism Monitor the user is running.
+        code = ('import os, sys; from prism_monitor import app; orig = app.single_instance; '
+                'app.single_instance = lambda n, m=b"show": orig(f"{n}-test-{os.getpid()}", m); '
+                'sys.exit(app.main(sys.argv[1:]))')
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'settings.json'
+            env = dict(os.environ, XDG_CONFIG_HOME=d, QT_QPA_PLATFORM='offscreen', PRISM_MONITOR_SMOKE_MS='300')
+            env['XDG_RUNTIME_DIR'] = d
+            subprocess.run([sys.executable, '-c', code, '--smoke-test', '--launch-at-login', '--native-widget',
+                            '--config', str(config)],
+                           cwd=root, env=env, check=True, capture_output=True, timeout=60)
+            saved = json.loads(config.read_text())
+            self.assertTrue(saved['launch_at_login'])
+            self.assertEqual((saved['native_widget'], saved['shown']), (True, False))   # tray only
+            self.assertIn('monitor_main.py', (Path(d) / 'autostart' / 'prism-monitor.desktop').read_text())
+            self.assertFalse((Path(d) / 'prism-monitor' / 'widget.json').exists())     # removed on quit
+
+    @unittest.skipUnless(LINUX, 'the desktop widgets are Linux-only')
+    def test_widget_menu_commands(self):
+        """The Plasma widget's right-click menu reaches a running monitor through --do."""
+        import subprocess, time
+        root = Path(__file__).resolve().parent.parent
+        name = f'test-{os.getpid()}'
+        code = ('import os, sys; from prism_monitor import app; orig = app.single_instance; '
+                f'app.single_instance = lambda n, m=b"show": orig(n + "-{name}", m); '
+                'sys.exit(app.main(sys.argv[1:]))')
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'settings.json'
+            env = dict(os.environ, XDG_CONFIG_HOME=d, XDG_RUNTIME_DIR=d, QT_QPA_PLATFORM='offscreen',
+                       PRISM_MONITOR_SMOKE_MS='6000')
+            first = subprocess.Popen([sys.executable, '-c', code, '--smoke-test', '--config', str(config)],
+                                     cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                widget = Path(d) / 'prism-monitor' / 'widget.json'
+                for _ in range(100):
+                    if widget.exists():
+                        break
+                    time.sleep(0.05)
+                for action in ('section:fans:on', 'hero:gpu', 'section:battery:off'):
+                    subprocess.run([sys.executable, '-c', code, '--do', action, '--config', str(config)],
+                                   cwd=root, env=env, check=True, timeout=30, capture_output=True)
+                for _ in range(60):     # the running monitor applies and publishes the change
+                    state = json.loads(widget.read_text()).get('state', {})
+                    if state.get('hero') == 'gpu' and not state['sections']['battery']:
+                        break
+                    time.sleep(0.1)
+                self.assertEqual(state['hero'], 'gpu')
+                self.assertTrue(state['sections']['fans'])
+                self.assertFalse(state['sections']['battery'])
+            finally:
+                first.terminate()
+                first.wait(10)
+
+    def test_widget_document(self):
+        """What the Plasma and GNOME widgets read: the Poster's rows, formatted and coloured."""
+        from PySide6.QtGui import QColor
+        from prism_monitor import poster as P, publish
+        content = P.Content(number='63', unit='°C', headline='CPU', subline='35% LOAD', groups=[
+            P.Group('SYSTEM', [P.Row('MEMORY', '9.4 / 32 GB', key='ram_used'),
+                               P.Row('SWAP', '0.0 / 12 GB', P.WARN, key='swap_used')]),
+            P.Group('BATTERIES', [P.Row('PAD', '35%', None, 0.35, key='bat:pad')])])
+        doc = publish.document(content, P.Ink(QColor('#ffffff'), QColor('#8fd8ff'), QColor('#000000')), 1.0)
+        self.assertEqual((doc['version'], doc['number'], doc['unit'], doc['accent']), (1, '63', '°C', '#8fd8ff'))
+        rows = doc['groups'][0]['rows']
+        self.assertEqual([r['label'] for r in rows], ['MEMORY', 'SWAP'])
+        self.assertEqual((rows[0]['color'], rows[1]['color']), (None, '#ffd166'))
+        self.assertEqual(doc['groups'][1]['rows'][0]['level'], 0.35)
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / 'prism-monitor' / 'widget.json'
+            out = publish.Publisher(target)
+            out.write(doc)
+            self.assertEqual(json.loads(target.read_text())['groups'], doc['groups'])
+            self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
+            out.clear()
+            self.assertFalse(target.exists())
+
     def test_process_names(self):
         from prism_monitor import linuxapi
         with tempfile.TemporaryDirectory() as d:

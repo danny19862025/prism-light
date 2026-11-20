@@ -3,7 +3,7 @@
 
 Unprivileged (in the widget process):
 * SystemSource: PDH counters (CPU utility/performance, network, disk) and
-  GlobalMemoryStatusEx (RAM).
+  GlobalMemoryStatusEx (RAM, page file size).
 * AdlGpuSource: AMD's display-driver ADL library, PMLog sensors; the same
   sensor indices LibreHardwareMonitor uses (LibreHardwareMonitorLib
   Interop/AtiAdlxx.cs, ADLPMLogSensors).
@@ -33,6 +33,7 @@ class SystemSource:
             'disk_read': r'\PhysicalDisk(_Total)\Disk Read Bytes/sec',
             'disk_write': r'\PhysicalDisk(_Total)\Disk Write Bytes/sec',
             'disk_idle': r'\PhysicalDisk(_Total)\% Idle Time',
+            'swap_pct': r'\Paging File(_Total)\% Usage',
         }
         self.missing = [k for k, path in counters.items() if not self.pdh.add(k, path)]
         if 'util' in self.missing:
@@ -69,6 +70,9 @@ class SystemSource:
         if memory:
             used, total = memory
             out['ram_used'] = reading(used, 'windows', extra=total, now=now)
+        swap_pct, swap_total = self.pdh.value('swap_pct'), winapi.page_file_size()
+        if swap_pct is not None and swap_total:   # no page file: left out, not shown as 0
+            out['swap_used'] = reading(swap_total * swap_pct / 100, 'pdh', extra=swap_total, now=now)
         return out
 
     def close(self):

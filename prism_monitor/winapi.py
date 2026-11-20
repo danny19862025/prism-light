@@ -119,6 +119,15 @@ def memory_status():
     return status.ullTotalPhys - status.ullAvailPhys, status.ullTotalPhys
 
 
+def page_file_size():
+    """Total page file bytes (commit limit minus physical memory, as Task Manager derives it), or None."""
+    status = _MemoryStatus()
+    status.dwLength = ctypes.sizeof(status)
+    if not kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        return None
+    return max(0, status.ullTotalPageFile - status.ullTotalPhys) or None
+
+
 def read_registry(root, path, name):
     import winreg
     try:

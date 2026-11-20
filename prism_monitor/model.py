@@ -58,6 +58,7 @@ METRICS = (
     Metric('gpu_vram', 'gpu', 'VRAM', 'GB'),
     Metric('gpu_fan', 'gpu', 'Fan', 'rpm', default=False),
     Metric('ram_used', 'ram', 'Used', 'GB', True, 100),
+    Metric('swap_used', 'ram', 'Swap', 'GB'),
     Metric('fps', 'fps', 'FPS', 'fps', True),
     Metric('frametime', 'fps', 'Frame time', 'ms'),
     Metric('net_down', 'net', 'Down', 'B/s', True, default=False),
@@ -99,7 +100,7 @@ def format_value(key, item):
         return f'{v:.0f} MHz'
     if key in ('cpu_power', 'gpu_power'):
         return f'{v:.0f} W'
-    if key in ('gpu_vram', 'ram_used'):
+    if key in ('gpu_vram', 'ram_used', 'swap_used'):
         gib = 1 << 30
         if item.extra:
             return f'{v / gib:.1f}/{item.extra / gib:.0f} GB'

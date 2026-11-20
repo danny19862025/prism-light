@@ -61,10 +61,14 @@ Settings are saved to `%APPDATA%\PrismMonitor\settings.json`. **Launch at login*
 
 Prism Monitor runs on Linux from source with the same widget, settings, Keep awake, batteries and FPS. Tested on Arch Linux with KDE Plasma 6 (Wayland), Ryzen 9 9900X and RX 9070 XT.
 
+To install, run `./Install-Linux.sh`. It needs no administrator rights. It sets up `.venv`, builds the FPS layer if a C compiler is present, adds Prism Monitor to the app menu, turns on **Start when I sign in** and starts the monitor. Turn sign-in start off from the tray menu or Settings. Running the installer again is safe.
+
+Manual setup:
+
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python tools/build_fps_layer.py    # optional: game FPS (needs a C compiler)
+.venv/bin/python tools/build_fps_layer.py    # optional: game FPS, see "Installing what FPS needs"
 .venv/bin/python monitor_main.py
 ```
 
@@ -85,6 +89,29 @@ python3 -m venv .venv
 
 **Game FPS.** While FPS or frame time is shown, Prism Monitor copies the built layer to `~/.local/share/prism-monitor/` and registers it in `~/.local/share/vulkan/implicit_layer.d/prism_monitor_fps.json`; hiding both removes it again. The layer counts Vulkan presents, which includes Windows games running on Proton (DXVK/VKD3D-Proton), and sends one datagram per present to an abstract Unix socket checked against your user id. It never draws, changes or delays frames, and does nothing while Prism Monitor is not running. Games started before the layer was installed are counted from their next launch. Native OpenGL games and Flatpak apps are not measured. To leave one game out, add `DISABLE_PRISM_FPS=1` to its launch options. **Automatic** follows the focused game when it is an X11/XWayland window (most Proton games), otherwise the busiest presenting game.
 
+### Desktop widget (KDE Plasma and GNOME)
+
+On Linux the readings can be shown by the desktop's own widget system instead of Prism Monitor's window. Prism Monitor keeps running in the tray, reads the sensors (including game FPS) and writes what the Poster shows to `$XDG_RUNTIME_DIR/prism-monitor/widget.json` once per update. Only you can read that file, and it is removed when the monitor quits. The widget draws that file in the same Poster look, colours and rows: CPU/GPU, memory, swap, fans and batteries, with FPS taking the big number while you play.
+
+`./Install-Linux.sh` installs the widget for the desktops it finds. It then hides Prism Monitor's own window, leaving the tray icon. **Show widget** in the tray menu brings the window back.
+
+**KDE Plasma 6**
+
+1. Run `./Install-Linux.sh`. It installs the Plasma widget `org.prismlight.monitor` with `kpackagetool6`.
+2. Right-click the desktop, choose **Add or Manage Widgets**, search for **Prism Monitor** and drag it onto the desktop. Drag its edges to resize it; the lettering scales with it.
+3. It also fits in a panel, where it shows the big number (CPU temperature, or FPS while gaming).
+4. Right-click it for its menu: **Show** FPS, CPU / GPU / memory, fans and batteries; **Big number** (CPU or GPU temperature); **Colours and fonts…** and **Keep awake…** (open those Settings tabs); **Start when I sign in**; and **Prism Monitor Settings…**. A left click also opens Settings. Size and position belong to Plasma: press and hold the widget, or use **Enter Edit Mode**. The menu runs `monitor_main.py --do ACTION`, which hands the command to the running monitor.
+
+**GNOME Shell 45–49**
+
+1. Run `./Install-Linux.sh`. It copies the extension `prism-monitor@prism-light` into `~/.local/share/gnome-shell/extensions/`, installs the Barlow font for your user and enables the extension.
+2. Sign out and back in once, because GNOME on Wayland only loads new extensions at sign-in.
+3. The widget appears behind windows at the top right of the main monitor. Turn it off or on in the **Extensions** app or with `gnome-extensions disable|enable prism-monitor@prism-light`.
+
+If Prism Monitor is not running, either widget says so instead of showing old numbers.
+
+To update the widgets after changing `widgets/`, run `./Install-Linux.sh` again.
+
 ## Metrics and where they come from
 
 | Metric | Source | Needs helper |
@@ -96,6 +123,7 @@ python3 -m venv .venv
 | GPU temp, hotspot, load, clock, board power, fan | AMD driver ADL PMLog sensors (same sensor IDs as LibreHardwareMonitor) | No |
 | VRAM used / total | ADL dedicated VRAM usage / display adapter registry size | No |
 | RAM used / total | `GlobalMemoryStatusEx` | No |
+| Swap used / total | PDH `\Paging File(_Total)\% Usage` × page file size (commit limit − RAM, from `GlobalMemoryStatusEx`); Linux: `SwapTotal − SwapFree` in `/proc/meminfo` (swap partitions, files and zram). Left out when no swap is configured. | No |
 | FPS, frame time | Intel PresentMon, for the selected process | No* |
 | Network up/down | PDH `Network Interface` (virtual/loopback adapters excluded) | No |
 | Disk active, read, write | PDH `PhysicalDisk(_Total)` | No |
@@ -113,6 +141,90 @@ A reading that is missing shows as *n/a*. One that has not updated for 2.5 polli
 ## Game FPS
 
 PresentMon reads the present events Windows already records through Event Tracing for Windows (ETW). Each event carries the presenting process ID and the time since that process's previous present. The widget averages the last second of `MsBetweenPresents` for the chosen process: FPS = 1000 / mean frame time. When a process has several swap chains, it uses the busiest one. The widget's own drawing and the monitor's refresh rate play no part.
+
+### Installing what FPS needs
+
+**Windows.** PresentMon ships with the app; `tools/fetch_sensors.py` fetches it for source builds. Nothing else is needed. See the note on the **Performance Log Users** group under [Metrics](#metrics-and-where-they-come-from).
+
+**Linux.** FPS comes from a small Vulkan layer (see [Linux](#linux)) that is built once on your PC. It counts Vulkan games, including Windows games on Steam/Proton. Follow these steps in a terminal.
+
+**Step 1. Find your graphics card.**
+
+```sh
+lspci | grep -iE 'vga|3d'
+```
+
+The output shows AMD/ATI, Intel or NVIDIA. You need it for step 2.
+
+**Step 2. Install the dependencies.** These are a C compiler, the Vulkan loader, your GPU's Vulkan driver and `vulkan-tools` for the check in step 3. Copy the one line for your distribution and GPU. Packages you already have are skipped.
+
+Arch, Manjaro, EndeavourOS, CachyOS:
+
+```sh
+# AMD
+sudo pacman -S --needed gcc vulkan-icd-loader vulkan-radeon vulkan-tools
+# Intel
+sudo pacman -S --needed gcc vulkan-icd-loader vulkan-intel vulkan-tools
+# NVIDIA
+sudo pacman -S --needed gcc vulkan-icd-loader nvidia-utils vulkan-tools
+```
+
+Debian, Ubuntu, Linux Mint, Pop!_OS:
+
+```sh
+# AMD or Intel
+sudo apt install gcc libvulkan1 mesa-vulkan-drivers vulkan-tools
+# NVIDIA: the proprietary driver includes Vulkan (on Ubuntu: sudo ubuntu-drivers install)
+sudo apt install gcc libvulkan1 vulkan-tools
+```
+
+Fedora, Nobara:
+
+```sh
+# AMD or Intel
+sudo dnf install gcc vulkan-loader mesa-vulkan-drivers vulkan-tools
+# NVIDIA: install the driver from RPM Fusion (akmod-nvidia) first, then:
+sudo dnf install gcc vulkan-loader vulkan-tools
+```
+
+openSUSE:
+
+```sh
+sudo zypper install gcc libvulkan1 libvulkan_radeon libvulkan_intel vulkan-tools
+```
+
+**Step 3. Check that Vulkan works.**
+
+```sh
+vulkaninfo --summary
+```
+
+Your GPU should be listed under *Devices*. If you get an error instead, fix the driver first, because games cannot use Vulkan either.
+
+**Step 4. Build the FPS layer.** Run this from the Prism Light folder (where `Install-Linux.sh` is). Running `./Install-Linux.sh` again does the same.
+
+```sh
+.venv/bin/python tools/build_fps_layer.py
+```
+
+It ends with `Built …/vendor/vklayer/libVkLayer_prism_fps.so`. The first build needs internet: it downloads Vulkan-Headers 1.4.309 from Khronos into `vendor/vulkan-headers/` and checks its SHA-256.
+
+**Step 5. Restart Prism Monitor.** Choose **Quit** in the tray icon's menu, then start **Prism Monitor** from the app menu.
+
+**Step 6. Turn FPS on.** In the right-click menu, switch on the **FPS** section (or tick **FPS** / **Frame time** in **Settings → Metrics**). This registers the layer. Confirm it with:
+
+```sh
+ls ~/.local/share/vulkan/implicit_layer.d/prism_monitor_fps.json
+```
+
+**Step 7. Start the game.** Games that were already running are counted from their next launch. No Steam launch options are needed. While a game runs, its FPS takes the big number.
+
+**If FPS still shows nothing:**
+
+* The layer is 64-bit only, so 32-bit games are not measured.
+* Native OpenGL games are not measured. Neither are Flatpak apps, including Flatpak Steam: use the distribution's Steam package.
+* A game whose launch options contain `DISABLE_PRISM_FPS=1` is skipped on purpose.
+* Pick the game in **Settings → Game FPS** if **Automatic** follows another window.
 
 **Process selection** is under **Settings → Game FPS**. **Automatic** follows the application in focus, ignoring shell processes. Alternatively, pick a process from the list of those currently presenting, or type an executable name. The widget never takes focus, so it does not interfere with automatic selection.
 

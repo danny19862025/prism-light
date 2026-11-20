@@ -12,7 +12,7 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QIcon,
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QColorDialog, QFontDialog, QMenu, QMessageBox, QSystemTrayIcon
 
-from . import autostart
+from . import autostart, publish
 from . import poster as P
 from .awake import AFTER, KeepAwake
 from .awake_ui import AwakeMenu, CountdownDialog
@@ -49,7 +49,7 @@ def make_icon(accent, awake=False):
 
 
 # Menu sections and the metrics each one switches, as in the Linux app's menu.
-SECTIONS = {'fps': ('fps', 'frametime'), 'system': ('cpu_temp', 'cpu_util', 'gpu_temp', 'gpu_util', 'ram_used'),
+SECTIONS = {'fps': ('fps', 'frametime'), 'system': ('cpu_temp', 'cpu_util', 'gpu_temp', 'gpu_util', 'ram_used', 'swap_used'),
             'fans': ('fans',), 'battery': ('battery',)}
 SIZES = {'Small': 0.8, 'Medium': 1.0, 'Large': 1.25}
 LAYERS = (('top', 'On top of windows (see it over games)'), ('normal', 'Normal'),
@@ -83,6 +83,7 @@ class PrismMonitor:
         self.screen_timer = QTimer(singleShot=True, interval=700, timeout=self.ensure_visible)
         self.fps_timer = QTimer(interval=2000, timeout=self.supervise_fps)
         self.last_snapshot = None
+        self.publisher = publish.Publisher() if LINUX else None   # for the Plasma/GNOME widgets
         self.closing = False
 
         self.widget.settings_requested.connect(self.show_settings)
@@ -268,6 +269,31 @@ class PrismMonitor:
         if on:
             visible += [k for k in keys]
         self.set_and_apply('visible', visible)
+
+    # Menu commands from the KDE Plasma / GNOME widgets (monitor_main.py --do ACTION).
+    REMOTE_TABS = ('awake', 'Appearance', 'Metrics', 'Behaviour', 'fps', 'sensors', 'about')
+
+    def remote(self, action):
+        """Apply one widget menu command; returns False for an unknown one."""
+        parts = action.split(':')
+        if parts[0] == 'section' and len(parts) == 3 and parts[1] in SECTIONS and parts[2] in ('on', 'off'):
+            self.show_section(parts[1], parts[2] == 'on')
+        elif parts[0] == 'hero' and len(parts) == 2 and parts[1] in ('cpu', 'gpu'):
+            self.set_and_apply('poster_hero', parts[1])
+        elif parts[0] == 'login' and len(parts) == 2 and parts[1] in ('on', 'off'):
+            self.set_and_apply('launch_at_login', parts[1] == 'on')
+        elif parts[0] == 'settings' and len(parts) <= 2 and (len(parts) == 1 or parts[1] in self.REMOTE_TABS):
+            self.show_settings(parts[1] if len(parts) == 2 else None)
+        else:
+            return False
+        self.sync_menu()
+        return True
+
+    def menu_state(self):
+        """Checkmarks for the widgets' right-click menu."""
+        visible = set(self.settings['visible'])
+        return {'sections': {s: bool(visible & set(keys)) for s, keys in SECTIONS.items()},
+                'hero': self.settings['poster_hero'], 'launch_at_login': self.settings['launch_at_login']}
 
     def check_action(self, text, key):
         action = QAction(text, self.menu, checkable=True)
@@ -528,6 +554,10 @@ class PrismMonitor:
         self.last_snapshot = snap
         self.awake.feed(snap)
         self.widget.update_snapshot(snap)
+        if self.publisher:
+            content = self.widget.poster or self.widget.poster_content(time.monotonic())
+            self.publisher.write(publish.document(content, self.widget.poster_ink(), self.settings['interval'],
+                                                  self.menu_state()))
         self.settings_window.update_status(snap, (self.host.state, self.host.detail))
         fps = snap.readings.get('fps')
         tip = [APP_NAME]
@@ -648,6 +678,8 @@ class PrismMonitor:
         self.collector.stop()
         self.presentmon.stop()
         self.host.stop()
+        if self.publisher:
+            self.publisher.clear()
         self.settings['shown'] = self.widget.isVisible()
         self.save()
         self.tray.hide()
@@ -677,6 +709,12 @@ def main(argv=None):
     parser.add_argument('--start-helper', action='store_true', help='start the sensor helper immediately')
     parser.add_argument('--setup-helper', action='store_true',
                         help='run the one-time automatic sensor helper setup (one administrator prompt)')
+    parser.add_argument('--launch-at-login', action='store_true',
+                        help='turn on "Start when I sign in" (used by the installers)')
+    parser.add_argument('--do', metavar='ACTION',
+                        help='a menu command from the desktop widget, e.g. section:fans:off, hero:gpu, settings:awake')
+    parser.add_argument('--native-widget', action='store_true',
+                        help="hide Prism Monitor's own window: a KDE Plasma or GNOME widget shows the readings")
     args, _ = parser.parse_known_args(argv)
     if LINUX and os.environ.get('WAYLAND_DISPLAY') and os.environ.get('DISPLAY') \
             and not os.environ.get('QT_QPA_PLATFORM') and not args.smoke_test:
@@ -688,10 +726,28 @@ def main(argv=None):
     app.setApplicationName('PrismMonitor')
     app.setApplicationDisplayName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
-    server = single_instance(f'PrismMonitor-{getpass.getuser()}', b'setup' if args.setup_helper else b'show')
+    words = [w for w, on in ((b'setup', args.setup_helper), (b'login', args.launch_at_login),
+                             (b'native', args.native_widget)) if on]
+    if args.do and all(c.isalnum() or c in ':_' for c in args.do):
+        words.append(b'do:' + args.do.encode())
+    message = b' '.join(words) or b'show'
+    server = single_instance(f'PrismMonitor-{getpass.getuser()}', message)
     if server is None:
         return 0
     settings = Settings(args.config)
+    if args.launch_at_login and not settings['launch_at_login']:
+        # Saved before startup: PrismMonitor syncs the autostart entry from this setting on launch.
+        settings['launch_at_login'] = True
+        try:
+            settings.save()
+        except OSError:
+            pass   # the entry is still written this session; the tray shows any later save error
+    if args.native_widget:
+        settings['native_widget'], settings['shown'] = True, False   # the desktop's widget draws; tray stays
+        try:
+            settings.save()
+        except OSError:
+            pass
     monitor = PrismMonitor(app, settings, start_hidden=args.hidden)
     app.setWindowIcon(make_icon(settings['accent']))
 
@@ -701,12 +757,31 @@ def main(argv=None):
             conn.readyRead.connect(lambda: handle(bytes(conn.readAll())))
 
     def handle(data):
-        if b'setup' in data:
+        words = data.split()
+        commands = [w[3:].decode(errors='replace') for w in words if w.startswith(b'do:')]
+        for command in commands:
+            monitor.remote(command)
+        words = [w for w in words if not w.startswith(b'do:')]
+        if commands and not words:
+            return                                           # a widget menu command only
+        if b'setup' in words:
             monitor.setup_or_start()
-        else:
-            monitor.widget.show()
+        if b'login' in words:
+            monitor.set_and_apply('launch_at_login', True)   # syncs the entry and the menu, then saves
+            monitor.sync_menu()
+        if b'native' in words:
+            settings['native_widget'] = True
+            if monitor.widget.isVisible():
+                monitor.toggle_widget()                      # hides it and saves
+        if not words or words == [b'show']:
+            # Launched again from the app menu: open Settings, and show this window (remembered,
+            # like the tray's Show) unless a Plasma/GNOME widget is drawing the readings.
+            if not settings['native_widget'] and not monitor.widget.isVisible():
+                monitor.toggle_widget()
             monitor.show_settings()
     server.newConnection.connect(incoming)
+    if args.do:     # no monitor was running: this one starts, then applies the widget's command
+        QTimer.singleShot(0, lambda: monitor.remote(args.do))
     if args.start_helper:
         QTimer.singleShot(200, monitor.start_helper)
     if args.setup_helper:

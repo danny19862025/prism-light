@@ -38,6 +38,7 @@ DEFAULTS = {
     'locked': False,
     'click_through': False,
     'launch_at_login': False,
+    'native_widget': False,         # Linux: a Plasma/GNOME widget draws the readings, not this window
     'helper_autostart': False,       # start the elevated sensor helper on launch (shows UAC)
     'helper_task': False,            # one-time setup done: start the protected helper task, no prompt
     'setup_hint_shown': False,
@@ -116,7 +117,7 @@ def validate(data):
     out['awake_folder'] = str(out['awake_folder'] or '')[:1024]
     apps = out['awake_auto_apps']
     out['awake_auto_apps'] = [str(a)[:260] for a in apps if a][:50] if isinstance(apps, list) else []
-    for key in ('graphs', 'header', 'color_levels', 'awake_display', 'always_on_top', 'locked', 'click_through', 'launch_at_login', 'helper_autostart', 'helper_task', 'battery_wake_bt',
+    for key in ('graphs', 'header', 'color_levels', 'awake_display', 'always_on_top', 'locked', 'click_through', 'launch_at_login', 'native_widget', 'helper_autostart', 'helper_task', 'battery_wake_bt',
                 'setup_hint_shown', 'shown'):
         out[key] = bool(out[key])
     return out

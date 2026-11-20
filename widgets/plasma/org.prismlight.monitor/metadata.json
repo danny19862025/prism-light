@@ -1,0 +1,15 @@
+{
+    "KPlugin": {
+        "Id": "org.prismlight.monitor",
+        "Name": "Prism Monitor",
+        "Description": "Live CPU, GPU, memory, swap, game FPS and battery readings in the Poster look",
+        "Icon": "utilities-system-monitor",
+        "Category": "System Information",
+        "Authors": [{ "Name": "Prism Light contributors" }],
+        "License": "GPL-3.0-only",
+        "Version": "1.0",
+        "FormFactors": ["desktop", "panel"]
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
