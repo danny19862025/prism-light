@@ -175,7 +175,7 @@ class Shell:
         side=QFrame();side.setObjectName('sidebar');side.setFixedWidth(200);nav=QVBoxLayout(side);nav.setContentsMargins(12,24,12,18);nav.setSpacing(6)
         nav.addWidget(text('PRISM LIGHT','brand'));nav.addWidget(text('LIGHTING STUDIO','brandSub'));nav.addSpacing(27)
         self.group=QButtonGroup(root);self.group.setExclusive(True)
-        items=[('◈','Discover',None),('▦','Library',3),('✧','Lighting',0),('▤','Devices',0),('⌘','Layouts',1),('⌁','Macros',4),('⌇','Monitoring',6),('◉','Audio & screen',2),('◇','Plugin references',5)]
+        items=[('◈','Discover',None),('▦','Library',3),('✧','Lighting',0),('▤','Devices',0),('⌘','Layouts',1),('⌁','Macros',4),('⌇','Monitoring',6),('◐','AIO display',7),('✣','Fans',8),('◉','Audio & screen',2),('◇','Plugin references',5)]
         for icon,name,target in items:
             b=QPushButton(f'{icon}   {name.replace("&","&&")}');b.setObjectName('nav');b.setCheckable(True)
             b.clicked.connect(lambda checked=False,t=target,n=name:self.navigate(t,n));self.group.addButton(b);nav.addWidget(b);self.nav_buttons.append(b);self.nav_map[name]=b

@@ -36,3 +36,23 @@ Version pinned: 6.17.0. Copyright (c) 2005–2023, PyInstaller Development Team.
 https://github.com/pyinstaller/pyinstaller/tree/v6.17.0
 
 The folder build preserves shared Qt libraries and includes the project's licenses. Dependency notices are not removed or rewritten. Before publishing a binary, review the exact built dependency inventory and include all matching source and third-party attribution files for that release.
+
+## Intel PresentMon 2.6.0 (FPS readout)
+
+`vendor/presentmon/PresentMon.exe`, unmodified console release from https://github.com/GameTechDev/PresentMon/releases/tag/v2.6.0 (Authenticode: Intel Corporation; SHA-256 b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af). MIT licence: `licenses/PresentMon-MIT.txt`.
+
+## PawnIO.Modules 0.2.11 — AMDFamily17 (Ryzen temperature)
+
+`vendor/pawnio-modules/AMDFamily17.bin`, unmodified signed module from https://github.com/namazso/PawnIO.Modules/releases/tag/0.2.11 (release ZIP SHA-256 43608cb89bc84247fef1368a139013f7d043e17db6d6c8dfc9b46bf0905a81f4). LGPL-2.1: `licenses/PawnIO-Modules-LGPL-2.1.txt`. Used read-only (SMN 0x59800).
+
+## Barlow font (Prism Monitor Poster look)
+
+`prism_monitor/fonts/Barlow-{Regular,SemiBold,Bold}.ttf`, unmodified, from https://github.com/jpt/barlow. Copyright 2017 The Barlow Project Authors. SIL Open Font License 1.1: `prism_monitor/fonts/OFL-barlow.txt`, shipped beside the fonts in the Prism Monitor bundle.
+
+## Reference implementations (no code copied)
+
+Protocol and register details were taken from OpenLinkHub (GPL-3.0, Nautilus LCD), LibreHardwareMonitor (MPL-2.0, ITE fan registers, Ryzen Tctl) and AMD's ADL SDK headers (MIT, GPU sensor IDs).
+
+## LibreHardwareMonitorLib 0.9.6 (Prism Monitor sensor helper)
+
+Upstream: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor (release v0.9.6, `LibreHardwareMonitor.zip`, SHA-256 `086d9f1b5a99e643edc2cfaaac16051685b551e4c5ac0b32a57c58c0e529c001`). Mozilla Public License 2.0; the license text is copied to `licenses/LibreHardwareMonitor-MPL-2.0.txt` in the Prism Monitor bundle. Prism Monitor uses the unmodified library and its bundled .NET dependency assemblies (MIT-licensed Microsoft/.NET Foundation packages, HidSharp, BlackSharp.Core, DiskInfoToolkit, RAMSPDToolkit) in a separate helper process, `PrismSensorHost.exe`, built from `monitor/sensorhost/PrismSensorHost.cs`. Source for the library is available at the upstream tag. `tools/fetch_monitor_deps.py` downloads and verifies it; it is not stored in git.

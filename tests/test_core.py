@@ -61,12 +61,13 @@ class Server:
                         if cmd==40:
                             response=struct.pack('<I',2 if self.action=='old' else 6)
                         elif cmd==0:
-                            if self.action=='changed' and sum(c[1]==0 for c in self.commands)>1:
+                            later=sum(c[1]==0 for c in self.commands)>1
+                            if self.action in ('changed','grown') and later:
                                 conn.sendall(struct.pack('<4sIII',b'ORGB',0,100,0))
-                            response=struct.pack('<I',1)
+                            response=struct.pack('<I',2 if self.action=='grown' and later else 1)
                         elif cmd==1:
                             response=fixture(self.direct)
-                        elif cmd in (50,1101,1050):
+                        elif cmd in (50,1000,1100,1101,1050):
                             continue
                         else:
                             raise AssertionError(cmd)
@@ -74,7 +75,7 @@ class Server:
                         # Deliberately fragmented TCP framing.
                         conn.sendall(wire[:7])
                         conn.sendall(wire[7:])
-        except (EOFError, ConnectionResetError, BrokenPipeError):
+        except (EOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             pass
         except Exception as e:
             self.errors.append(e)
@@ -100,6 +101,28 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from('<I',mode)[0],len(mode))
         self.assertEqual(struct.unpack_from('<I',mode,4)[0],0)
         self.assertEqual(server.commands[0][2],struct.pack('<I',3))
+        commands=[c[1] for c in server.commands]
+        self.assertLess(commands.index(1100),commands.index(1101))
+        self.assertLess(commands.index(1101),commands.index(1050))
+    def test_rejected_direct_mode_prevents_color_write(self):
+        from unittest.mock import patch
+        server=Server();client=OpenRGB()
+        try:
+            d=client.connect(server.port)[0]
+            rejected=bytearray(fixture())
+            reader_offset=8+sum(len(string(s)) for s in ('Fixture keyboard','Test vendor','Description','1','serial-A','USB-1'))+2
+            struct.pack_into('<I',rejected,reader_offset,1)
+            original=client.request
+            def request(command,data=b'',device=0):
+                if command==1:return bytes(rejected)
+                return original(command,data,device)
+            with patch.object(client,'request',side_effect=request):
+                with self.assertRaisesRegex(SDKError,'did not activate Direct'):
+                    client.apply([d.key],'#FF0000',100)
+            self.assertNotIn(d.key,client.prepared)
+        finally:
+            client.close();server.finish()
+        self.assertFalse(any(c[1]==1050 for c in server.commands))
     def test_unsupported_device_sends_no_write(self):
         server=Server(direct=False); client=OpenRGB()
         try:
@@ -125,15 +148,39 @@ class ProtocolTests(unittest.TestCase):
                     self.assertIsNone(client.sock)
                 finally:
                     client.close();server.finish()
-    def test_topology_change_blocks_writes(self):
+    def test_change_notice_with_same_devices_keeps_streaming(self):
         server=Server('changed');client=OpenRGB()
         try:
             d=client.connect(server.port)[0]
-            with self.assertRaisesRegex(SDKError,'list changed'):
+            self.assertIn('sent',client.apply([d.key],'#FFFFFF',100))
+            self.assertFalse(client.list_changed)
+        finally:
+            client.close();server.finish()
+        self.assertTrue(any(c[1]==1050 for c in server.commands))
+    def test_topology_change_blocks_writes(self):
+        server=Server('grown');client=OpenRGB()
+        try:
+            d=client.connect(server.port)[0]
+            with self.assertRaisesRegex(SDKError,'count changed'):
                 client.apply([d.key],'#FFFFFF',100)
         finally:
             client.close();server.finish()
         self.assertFalse(any(c[1]==1050 for c in server.commands))
+    def test_resize_zone_sends_size_and_reloads(self):
+        from unittest.mock import patch
+        server=Server();client=OpenRGB()
+        try:
+            d=client.connect(server.port)[0]
+            self.assertEqual(d.resizable,[(0,'Main keys',2,1,2)])
+            with self.assertRaisesRegex(ValueError,'accepts 1–2'):client.resize_zone(d.key,0,3)
+            with self.assertRaisesRegex(ValueError,'fixed'):client.resize_zone(d.key,5,1)
+            with patch.object(client,'connect',return_value=['reloaded']) as reload:
+                self.assertEqual(client.resize_zone(d.key,0,1),['reloaded'])
+                reload.assert_called_once_with(server.port)
+        finally:
+            client.close();server.finish()
+        resize=[c for c in server.commands if c[1]==1000]
+        self.assertEqual(resize,[(0,1000,struct.pack('<ii',0,1))])
     def test_truncated_device(self):
         with self.assertRaises(SDKError):parse_device(0,fixture()[:-1])
     def test_color_validation_and_dimming(self):

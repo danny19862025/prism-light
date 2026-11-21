@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+.prism-poster { padding: 10px; font-family: Barlow, Cantarell, sans-serif; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.75); }
+.prism-caption { font-size: 9px; font-weight: 600; letter-spacing: 8px; }
+.prism-headline { font-size: 33px; font-weight: 700; }
+.prism-subline { font-size: 14px; font-weight: 700; letter-spacing: 1px; }
+.prism-line { height: 2px; margin-top: 8px; }
+.prism-number { font-size: 101px; font-weight: 700; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); }
+.prism-unit { font-size: 28px; font-weight: 700; padding-top: 14px; }
+.prism-group { font-size: 10px; font-weight: 700; letter-spacing: 6px; margin-top: 12px; margin-bottom: 4px; }
+.prism-label { font-size: 14px; font-weight: 600; letter-spacing: 1px; }
+.prism-value { font-size: 16px; font-weight: 700; }
+.prism-gauge { height: 1px; margin-top: 2px; }
+.prism-idle { font-size: 15px; }
