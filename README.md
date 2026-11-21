@@ -8,9 +8,12 @@ This is a working development build, **not full SignalRGB feature parity**. The 
 
 ## Prism Monitor (hardware stats widget)
 
-`PrismMonitor.exe` is a separate Windows 11 desktop widget for live CPU/GPU/RAM temperatures, load, clocks, power and per-game FPS. See [docs/MONITOR.md](docs/MONITOR.md). Run from source with `.venv\Scripts\python monitor_main.py` (or **Run-PrismMonitor.cmd**). Build the installer `dist/PrismMonitor-Setup-<version>.exe` (needs Inno Setup 6) and the portable `dist/PrismMonitor-windows.zip` with `.venv\Scripts\python build_monitor.py`.
+Prism Monitor, the desktop widget for CPU/GPU temperature and load, game FPS, fans and batteries on Windows and Linux, now has its own repository: **[danny19862025/prism-monitor](https://github.com/danny19862025/prism-monitor)**.
 
-On Linux, `./Install-Linux.sh` installs it from source and starts it at sign-in (or run `.venv/bin/python monitor_main.py` yourself), using the kernel's sensors (no helper or administrator rights) and an optional Vulkan layer for game FPS (`.venv/bin/python tools/build_fps_layer.py`). See [Linux in docs/MONITOR.md](docs/MONITOR.md#linux).
+* **Windows:** download the installer from its [latest release](https://github.com/danny19862025/prism-monitor/releases/latest).
+* **Linux:** `git clone https://github.com/danny19862025/prism-monitor.git`, then run `./Install-Linux.sh` in that folder.
+
+New Prism Monitor versions and fixes are published there. The copy of Prism Monitor in this repository (`prism_monitor/`, [docs/MONITOR.md](docs/MONITOR.md)) is older and is no longer updated.
 
 ## Run on Linux
 
